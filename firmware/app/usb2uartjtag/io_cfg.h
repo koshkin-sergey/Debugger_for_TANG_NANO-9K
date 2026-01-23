@@ -25,22 +25,16 @@
  
 #define UART_TXD_PIN	GPIO_PIN_26
 #define UART_RXD_PIN	GPIO_PIN_27
-#define UART_DTR_PIN	GPIO_PIN_28
-#define UART_RTS_PIN	GPIO_PIN_24
-#define UART_CTS_PIN	GPIO_PIN_25
+//#define UART_DTR_PIN	GPIO_PIN_28
+//#define UART_RTS_PIN	GPIO_PIN_24
 
-#define LED0_PIN		GPIO_PIN_9
-#define LED1_PIN		GPIO_PIN_17
+#define LED0_PIN		GPIO_PIN_24
+#define LED1_PIN		GPIO_PIN_25
 
-#define TMS_PIN			GPIO_PIN_2
-#define TCK_PIN			GPIO_PIN_15
-#define TDI_PIN			GPIO_PIN_0
-#define TDO_PIN			GPIO_PIN_1
-
-//UART0 for debug
-#define UART0_TXD_PIN	GPIO_PIN_14
-#define UART0_RXD_PIN	GPIO_PIN_23
-
+#define TMS_PIN			GPIO_PIN_14
+#define TCK_PIN			GPIO_PIN_23
+#define TDI_PIN			GPIO_PIN_17
+#define TDO_PIN			GPIO_PIN_15
 
 #endif
 
