@@ -60,25 +60,23 @@ struct device *usb_fs;
 /************************  led ctrl functions  ************************/
 static uint32_t led_pins[2] = {LED0_PIN, LED1_PIN};
 static volatile uint8_t led_stat[2] = {0, 0};
+
 static void led_gpio_init(void)
 {
-    gpio_set_mode(led_pins[0], GPIO_OUTPUT_MODE);
-    gpio_set_mode(led_pins[1], GPIO_OUTPUT_MODE);
-	return;
+  gpio_set_mode(led_pins[0], GPIO_OUTPUT_MODE);
+  gpio_set_mode(led_pins[1], GPIO_OUTPUT_MODE);
 }
 
 void led_set(uint8_t idx, uint8_t status)
 {
-    gpio_write(led_pins[idx], !status);
-	led_stat[idx] = status;
-	return;
+  gpio_write(led_pins[idx], !status);
+  led_stat[idx] = status;
 }
 
 void led_toggle(uint8_t idx)
 {
-	led_stat[idx] = !led_stat[idx];
-    gpio_write(led_pins[idx], !led_stat[idx]);
-	return;
+  led_stat[idx] = !led_stat[idx];
+  gpio_write(led_pins[idx], !led_stat[idx]);
 }
 
 /************************  API for usbd_ftdi  ************************/
@@ -89,12 +87,12 @@ void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits, uint8_t pari
 
 void usbd_ftdi_set_dtr(bool dtr)
 {
-    dtr_pin_set(!dtr);
+//    dtr_pin_set(!dtr);
 }
 
 void usbd_ftdi_set_rts(bool rts)
 {
-    rts_pin_set(!rts);
+//    rts_pin_set(!rts);
 }
 
 
@@ -276,7 +274,7 @@ usbd_endpoint_t cdc_in_ep0 =
 //for dbg chip id
 static void hexarr2string(uint8_t *hexarray,int length,uint8_t *string)
 {
-	unsigned char num2string_table[] = "0123456789ABCDEF";
+	static const unsigned char num2string_table[] = "0123456789ABCDEF";
     int i = 0;
 	while(i < length)
 	{
@@ -295,24 +293,24 @@ int main(void)
     bflb_platform_init(0);
     uart_ringbuffer_init();
     uart1_init();
-    uart1_set_dtr_rts(UART_DTR_PIN,UART_RTS_PIN);
-    uart1_dtr_init();
-    uart1_rts_init();
+//    uart1_set_dtr_rts(UART_DTR_PIN,UART_RTS_PIN);
+//    uart1_dtr_init();
+//    uart1_rts_init();
     led_gpio_init();
-	led_set(0, 1);	//led0 for RX/TX indication
-	led_set(1, 1);	//led1 for Power indication
+    led_set(0, 1);	//led0 for RX/TX indication
+    led_set(1, 1);	//led1 for Power indication
     jtag_ringbuffer_init();
     jtag_gpio_init();
     EF_Ctrl_Read_Chip_ID(chipid);
-    // hexarr2string(&chipid[2],3,chipid2);
+    hexarr2string(&chipid[2],3,chipid2);
     // bflb_platform_dump(chipid,8);
     // bflb_platform_dump(chipid2,6);
-    cdc_descriptor[0x12+0x37+0x04+0x0a+0x1c+0x24] = 	0x00; //chipid2[0];
-    cdc_descriptor[0x12+0x37+0x04+0x0a+0x1c+0x24+2] = 	0x11; //chipid2[1];
-    cdc_descriptor[0x12+0x37+0x04+0x0a+0x1c+0x24+4] = 	0x22; //chipid2[2];
-    cdc_descriptor[0x12+0x37+0x04+0x0a+0x1c+0x24+6] = 	0x33; //chipid2[3];
-    cdc_descriptor[0x12+0x37+0x04+0x0a+0x1c+0x24+8] = 	0x44; //chipid2[4];
-    cdc_descriptor[0x12+0x37+0x04+0x0a+0x1c+0x24+10] = 	0x55; //chipid2[5];
+    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24     ] = chipid2[0];
+    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 2 ] = chipid2[1];
+    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 4 ] = chipid2[2];
+    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 6 ] = chipid2[3];
+    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 8 ] = chipid2[4];
+    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 10] = chipid2[5];
     usbd_desc_register(cdc_descriptor);
 
     usbd_ftdi_add_interface(&cdc_class0,&cdc_data_intf0);
