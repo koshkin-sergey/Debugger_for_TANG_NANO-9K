@@ -35,18 +35,18 @@
 #include "bl702_pwm.h"
 #include "io_cfg.h"
 
-#define GOWIN_INT_FLASH_QUIRK   1
-#define GW_DBG                  1
+#define GOWIN_INT_FLASH_QUIRK     0
+#define GW_DBG                    1
 
-#define PWM_CH                  3 //TCK pin num %5
+#define PWM_CH                    3 //TCK pin num %5
 
-#define GPIO_IN_ADDR            ((volatile uint32_t *)0x40000180)
-#define GPIO_OUT_ADDR           ((volatile uint32_t *)0x40000188)
-#define TDO                     (*GPIO_IN_ADDR & (1 << TDO_PIN))
+#define GPIO_IN_ADDR              ((volatile uint32_t *)0x40000180)
+#define GPIO_OUT_ADDR             ((volatile uint32_t *)0x40000188)
+#define TDO                       (*GPIO_IN_ADDR & (1 << TDO_PIN))
 
 #define MPSSE_IDLE                0
-#define MPSSE_RCV_LENGTH_BYTE     1
-#define MPSSE_RCV_LENGTH_BIT      2
+#define MPSSE_RCV_LENGTH_1        1
+#define MPSSE_RCV_LENGTH_2        2
 #define MPSSE_TRANSMIT_BYTE_LSB   3
 #define MPSSE_TRANSMIT_BYTE_MSB   4
 #define MPSSE_TRANSMIT_BIT_LSB    5
@@ -55,19 +55,19 @@
 #define MPSSE_RUN_TEST            8
 
 /* Data Shifting Command Bit Definitions */
-#define DSC_NVE_CLK_ON_WR   (1UL << 0)
-#define DSC_BIT_MODE        (1UL << 1)
-#define DSC_NVE_CLK_ON_RD   (1UL << 2)
-#define DSC_LSB_FIRST       (1UL << 3)
-#define DSC_WRITE_TDI       (1UL << 4)
-#define DSC_READ_TDO        (1UL << 5)
-#define DSC_WRITE_TMS       (1UL << 6)
-#define DSC_INSTRACTION     (1UL << 7)
+#define DSC_NVE_CLK_ON_WR         (1UL << 0)
+#define DSC_BIT_MODE              (1UL << 1)
+#define DSC_NVE_CLK_ON_RD         (1UL << 2)
+#define DSC_LSB_FIRST             (1UL << 3)
+#define DSC_WRITE_TDI             (1UL << 4)
+#define DSC_READ_TDO              (1UL << 5)
+#define DSC_WRITE_TMS             (1UL << 6)
+#define DSC_INSTRACTION           (1UL << 7)
 
-#define JTAG_TX_BUFFER_SIZE (1 * 1024)
-#define JTAG_RX_BUFFER_SIZE (4096)  //64  //1801
+#define JTAG_TX_BUFFER_SIZE       (1 * 1024)
+#define JTAG_RX_BUFFER_SIZE       (4096)  //64  //1801
 
-//6.94ns every "nop"  
+//6.94ns every "nop"
 #define DELAY() \
 {\
   __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
@@ -96,8 +96,7 @@ uint8_t jtag_rx_buffer[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data"))
 static volatile uint32_t jtag_rx_len = 0;
 static volatile uint32_t jtag_rx_pos __attribute__((section(".tcm_data")));
 
-static uint32_t mpsse_longlen __attribute__((section(".tcm_data"))) = 0;
-static uint32_t mpsse_shortlen __attribute__((section(".tcm_data"))) = 0;
+static uint32_t mpsse_length __attribute__((section(".tcm_data"))) = 0;
 static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static uint32_t jtag_cmd __attribute__((section(".tcm_data"))) = 0;
 static volatile uint32_t jtag_received_flag __attribute__((section(".tcm_data"))) = false;
@@ -256,8 +255,8 @@ void usbd_cdc_jtag_in(uint8_t ep)
 
 ATTR_CLOCK_SECTION void jtag_process(void)
 {
-  uint8_t  usb_tx_data;
-  uint32_t data = 0;
+  uint8_t  tx_data;
+  uint32_t rx_data = 0;
   uint64_t tmpt = mtimer_get_time_us();
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
   register uint32_t bitbang = 0;
@@ -323,19 +322,16 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           /* Data Shifting Command */
           case 0x11:
-          case 0x19:
-          case 0x31:
-          case 0x39:
-            mpsse_status = MPSSE_RCV_LENGTH_BYTE;
-            break;
-
           case 0x13:
+          case 0x19:
           case 0x1b:
+          case 0x31:
           case 0x33:
+          case 0x39:
           case 0x3b:
           case 0x4b:
           case 0x6b:
-            mpsse_status = MPSSE_RCV_LENGTH_BIT;
+            mpsse_status = MPSSE_RCV_LENGTH_1;
             break;
 
           default:
@@ -345,19 +341,34 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         break;
 
-      case MPSSE_RCV_LENGTH_BYTE:
-        mpsse_longlen = jtag_rx_buffer[jtag_rx_pos++];
-        mpsse_longlen |= (jtag_rx_buffer[jtag_rx_pos++] << 8) & 0xff00;
+      case MPSSE_RCV_LENGTH_1:
+        mpsse_length = jtag_rx_buffer[jtag_rx_pos++];
+        if ((jtag_cmd & DSC_BIT_MODE) == 0U) {
+          mpsse_status = MPSSE_RCV_LENGTH_2;
+        }
+        else {
+          if ((jtag_cmd & DSC_WRITE_TMS) != 0U) {
+            mpsse_status = MPSSE_TMS_OUT;
+          }
+          else if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
+            mpsse_status = MPSSE_TRANSMIT_BIT_MSB;
+          }
+          else {
+            mpsse_status = MPSSE_TRANSMIT_BIT_LSB;
+          }
+        }
+        break;
 
+      case MPSSE_RCV_LENGTH_2:
+        mpsse_length |= (jtag_rx_buffer[jtag_rx_pos++] << 8) & 0xff00;
 #if GOWIN_INT_FLASH_QUIRK
-        if ((mpsse_longlen >=2000) && (jtag_cmd & (1 << 5)) == 0) {
+        if ((mpsse_length >=2000) && (jtag_cmd & (1 << 5)) == 0) {
           pwm_start();
           mpsse_status = MPSSE_RUN_TEST;
         }
-        else if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
-#else
-          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
+        else
 #endif
+          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
             mpsse_status = MPSSE_TRANSMIT_BYTE_MSB;
           }
           else {
@@ -365,27 +376,13 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           }
         break;
 
-      case MPSSE_RCV_LENGTH_BIT:
-        mpsse_shortlen = jtag_rx_buffer[jtag_rx_pos++];
-
-        if ((jtag_cmd & DSC_WRITE_TMS) != 0U) {
-          mpsse_status = MPSSE_TMS_OUT;
-        }
-        else if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
-          mpsse_status = MPSSE_TRANSMIT_BIT_MSB;
-        }
-        else {
-          mpsse_status = MPSSE_TRANSMIT_BIT_LSB;
-        }
-        break;
-
       case MPSSE_TRANSMIT_BYTE_LSB:
-        data = jtag_rx_buffer[jtag_rx_pos++];
-        usb_tx_data = 0;
+        rx_data = jtag_rx_buffer[jtag_rx_pos++];
+        tx_data = 0;
         bitbang = *gpio_out;
 
         for (uint32_t i = 8; i ; i--) {
-          if (data & 0x01) {
+          if (rx_data & 0x01) {
             //TDI_HIGH;
             bitbang |= (1 << TDI_PIN);
           } else {
@@ -400,11 +397,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          data >>= 1;
-          usb_tx_data >>= 1;
+          rx_data >>= 1;
+          tx_data >>= 1;
 
           if (TDO != 0U) {
-            usb_tx_data |= 0x80;
+            tx_data |= 0x80;
           }
 
           //TCK_LOW;
@@ -413,11 +410,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(usb_tx_data);
+          jtag_write(tx_data);
         }
 
-        if (mpsse_longlen > 0U) {
-          --mpsse_longlen;
+        if (mpsse_length > 0U) {
+          --mpsse_length;
         }
         else {
           mpsse_status = MPSSE_IDLE;
@@ -425,12 +422,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BYTE_MSB:
-        data = jtag_rx_buffer[jtag_rx_pos++];
-        usb_tx_data = 0;
+        rx_data = jtag_rx_buffer[jtag_rx_pos++];
+        tx_data = 0;
         bitbang = *gpio_out;
 
         for (uint32_t i = 8; i ; i--) {
-          if (data & 0x80) {
+          if (rx_data & 0x80) {
             //MOSI_HIGH;
             bitbang |= (1 << TDI_PIN);
           } else {
@@ -445,11 +442,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          data <<= 1;
-          usb_tx_data <<= 1;
+          rx_data <<= 1;
+          tx_data <<= 1;
 
           if (TDO != 0U) {
-            usb_tx_data |= 0x01;
+            tx_data |= 0x01;
           }
 
           //TCK_LOW;
@@ -458,11 +455,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(usb_tx_data);
+          jtag_write(tx_data);
         }
 
-        if (mpsse_longlen > 0U) {
-          --mpsse_longlen;
+        if (mpsse_length > 0U) {
+          --mpsse_length;
         }
         else {
           mpsse_status = MPSSE_IDLE;
@@ -470,12 +467,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BIT_LSB:
-        data = jtag_rx_buffer[jtag_rx_pos++];
-        usb_tx_data = 0;
+        rx_data = jtag_rx_buffer[jtag_rx_pos++];
+        tx_data = 0;
         bitbang = *gpio_out;
 
         do {
-          if (data & 0x01) {
+          if (rx_data & 0x01) {
             //TDI_HIGH;
             bitbang |= (1 << TDI_PIN);
           } else {
@@ -490,32 +487,32 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          data >>= 1;
-          usb_tx_data >>= 1;
+          rx_data >>= 1;
+          tx_data >>= 1;
 
           if (TDO != 0U) {
-            usb_tx_data |= 0x80;
+            tx_data |= 0x80;
           }
 
           //TCK_LOW;
-          bitbang &= ~(1<<TCK_PIN);
+          bitbang &= ~(1 << TCK_PIN);
           *gpio_out = bitbang;
-        } while ((mpsse_shortlen--) > 0U);
+        } while (mpsse_length-- > 0U);
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(usb_tx_data);
+          jtag_write(tx_data);
         }
 
         mpsse_status = MPSSE_IDLE;
         break;
 
       case MPSSE_TRANSMIT_BIT_MSB:
-        data = jtag_rx_buffer[jtag_rx_pos++];
-        usb_tx_data = 0;
+        rx_data = jtag_rx_buffer[jtag_rx_pos++];
+        tx_data = 0;
         bitbang = *gpio_out;
 
         do {
-          if (data & 0x80) {
+          if (rx_data & 0x80) {
             //TDI_HIGH;
             bitbang |= (1 << TDI_PIN);
           } else {
@@ -530,31 +527,31 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          data <<= 1;
-          usb_tx_data <<= 1;
+          rx_data <<= 1;
+          tx_data <<= 1;
 
           if (TDO != 0U) {
-            usb_tx_data |= 0x01;
+            tx_data |= 0x01;
           }
 
           //TCK_LOW;
-          bitbang &= ~(1<<TCK_PIN);
+          bitbang &= ~(1 << TCK_PIN);
           *gpio_out = bitbang;
-        } while ((mpsse_shortlen--) > 0U);
+        } while (mpsse_length-- > 0U);
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(usb_tx_data);
+          jtag_write(tx_data);
         }
 
         mpsse_status = MPSSE_IDLE;
         break;
 
       case MPSSE_TMS_OUT:
-        data = jtag_rx_buffer[jtag_rx_pos++];
-        usb_tx_data = 0;
+        rx_data = jtag_rx_buffer[jtag_rx_pos++];
+        tx_data = 0;
         bitbang = *gpio_out;
 
-        if ((data & (1 << 7)) != 0U) {
+        if ((rx_data & (1 << 7)) != 0U) {
           //TDI_HIGH;
           bitbang |= 1 << TDI_PIN;
         }
@@ -564,7 +561,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
 
         do {
-          if (data & 0x01) {
+          if (rx_data & 0x01) {
             //TMS_HIGH;
             bitbang |= (1 << TMS_PIN);
           } else {
@@ -579,36 +576,36 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          data >>= 1;
-          usb_tx_data >>= 1;
+          rx_data >>= 1;
+          tx_data >>= 1;
 
           if (TDO != 0U) {
-            usb_tx_data |= 0x80;
+            tx_data |= 0x80;
           }
 
           //TCK_LOW;
-          bitbang &= ~(1<<TCK_PIN);
+          bitbang &= ~(1 << TCK_PIN);
           *gpio_out = bitbang;
-        } while ((mpsse_shortlen--) > 0);
+        } while (mpsse_length-- > 0);
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(usb_tx_data);
+          jtag_write(tx_data);
         }
 
         mpsse_status = MPSSE_IDLE;
         break;
 
+#if GOWIN_INT_FLASH_QUIRK
       case MPSSE_RUN_TEST:
-        if (mpsse_longlen == 0)
-        {
+        if (mpsse_length == 0) {
           mpsse_status = MPSSE_IDLE;
           pwm_stop();
         }
-
         jtag_rx_pos++;
-        mpsse_longlen--;
+        mpsse_length--;
         DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();
         break;
+#endif
 
       default:
         mpsse_status = MPSSE_IDLE;
