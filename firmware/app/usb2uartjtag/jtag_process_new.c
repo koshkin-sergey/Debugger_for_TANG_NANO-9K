@@ -198,58 +198,34 @@ static volatile int ef_flag = 0;
 // 4b 03 03 1b 06 15 6b 00 01 4b 01 01 4b 05 00 4b 03 03 1b 06 71 6b 00 01  4b 01 01 4b  05 00 4b 02
 // len>=21, idx=18: 1b 06 71
 void usbd_cdc_jtag_out(uint8_t ep)
-{//
-    uint32_t chunk;
-    //if (!jtag_received_flag)
-	if(!doing_flag)
-    {
-        usbd_ep_read(ep, jtag_rx_buffer+jtag_rx_len, 64, &chunk);
-
-        if (chunk == 0)
-        {
-            //MSG("111\r\n");
-            return;
-        }
-		//if(jtag_rx_len == 0) MSG("\r\n");
-        //查找ef program标志 1b 06 71 6b 00 01
-        uint8_t* p0 = jtag_rx_buffer+jtag_rx_len;
-        uint8_t* p = jtag_rx_buffer+jtag_rx_len+18;
-        uint8_t* p1 = jtag_rx_buffer+jtag_rx_len+chunk-5;
-        if (!ef_flag && chunk>=21 && p[0]==0x1b && p[1]==0x06 && p[2]==0x71) {
-          ef_flag = 1;
-        }
-
-        if(ef_flag == 1) {  
-            if( (p1[0]==0x19 && p1[1]==0x01)){
-                ef_flag = 0;    //结尾是 19 01 00 00 00 (只适用于新工艺的1NZ和4K系列) 
-            }/* else if ((p0[4]==0x19 && p0[5]==0xee && p0[6]==0x02)){
-                //01 4b 03 01  19 ee 02 00  //1N FPGA
-                ef_flag = 2;
-                ef_cnt = 0x2ee - 6-1;
-            } else if ((p0[26]==0x19 && p0[27]==0xee && p0[28]==0x02)) {
-                //1N FPGA
-                //06 00 4b 00  01 4b 03 01  4b 02 01 19  02 00 00 00  00 1b 06 00  4b 00 01 4b  03 01 19 ee  02 00 00 00
-                ef_flag = 2;
-                ef_cnt = 0x2ee - 28-1;
-            }*/
-        } /*else if(ef_flag == 2) {
-            ef_cnt -= chunk;
-            if(ef_cnt<=0) {
-                ef_flag = 0;
-            }
-        }*/
-            
-        //MSG("@%d@",chunk);
-        
-        jtag_rx_len += chunk;
-
-        // bflb_platform_dump(jtag_rx_buffer, jtag_rx_len);
-        jtag_rx_pos = 0;
-        jtag_received_flag = true;
-		last_rcv = mtimer_get_time_us();
-		//MSG("%d", mtimer_get_time_us()%10000); //, 
-		usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);	//表示处理好一帧？
+{
+  uint32_t chunk;
+  //if (!jtag_received_flag)
+  if (!doing_flag) {
+    usbd_ep_read(ep, jtag_rx_buffer+jtag_rx_len, 64, &chunk);
+    if (chunk == 0) {
+      return;
     }
+
+    //查找ef program标志 1b 06 71 6b 00 01
+    uint8_t* p = jtag_rx_buffer+jtag_rx_len+18;
+    uint8_t* p1 = jtag_rx_buffer+jtag_rx_len+chunk-5;
+    if (!ef_flag && chunk>=21 && p[0]==0x1b && p[1]==0x06 && p[2]==0x71) {
+      ef_flag = 1;
+    }
+
+    if (ef_flag == 1) {
+      if ((p1[0]==0x19 && p1[1]==0x01)) {
+        ef_flag = 0;
+      }
+    }
+
+    jtag_rx_len += chunk;
+    jtag_rx_pos = 0;
+    jtag_received_flag = true;
+    last_rcv = mtimer_get_time_us();
+    usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);	//表示处理好一帧？
+  }
 }
 
 #else 
@@ -292,18 +268,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
 #if GW_DBG
   if (ef_flag == 0) {
-    if (((tmpt-last_rcv) < 5U) || (jtag_rx_len == 0U))	//200us之后再统一处理, 加速整包的处理  //
-    {
+    if (((tmpt-last_rcv) < 5U) || (jtag_rx_len == 0U)) {
       return;
     }
-  } else {
-    //if((jtag_rx_len < 1750))	//200us之后再统一处理, 加速整包的处理  //
-    //if((tmpt-last_rcv<500) || (jtag_rx_len == 0))
-    //{	//MSG("#%d#", jtag_rx_len);
-    //    return;
-    //}
-    //MSG("@%d,%d@", tmpt%10000, last_rcv%10000);
-    return; //直接返回，等待接收完成
+  }
+  else {
+    return;
   }
 #endif
 
