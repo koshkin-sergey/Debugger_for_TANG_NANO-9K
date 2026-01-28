@@ -42,16 +42,14 @@
 
 #define GPIO_IN_ADDR              ((volatile uint32_t *)0x40000180)
 #define GPIO_OUT_ADDR             ((volatile uint32_t *)0x40000188)
-#define TDO                       (*GPIO_IN_ADDR & (1 << TDO_PIN))
+#define TDO                       (*GPIO_IN_ADDR & (TDO_PIN_MASK))
 
 #define MPSSE_IDLE                0
 #define MPSSE_RCV_LENGTH_1        1
 #define MPSSE_RCV_LENGTH_2        2
 #define MPSSE_TRANSMIT_BYTE       3
-#define MPSSE_TRANSMIT_BIT_LSB    4
-#define MPSSE_TRANSMIT_BIT_MSB    5
-#define MPSSE_TMS_OUT             6
-#define MPSSE_RUN_TEST            7
+#define MPSSE_TRANSMIT_BIT        4
+#define MPSSE_RUN_TEST            5
 
 /* Data Shifting Command Bit Definitions */
 #define DSC_NVE_CLK_ON_WR         (1UL << 0)
@@ -62,6 +60,11 @@
 #define DSC_READ_TDO              (1UL << 5)
 #define DSC_WRITE_TMS             (1UL << 6)
 #define DSC_INSTRACTION           (1UL << 7)
+
+#define TMS_PIN_MASK              (1 << TMS_PIN)
+#define TCK_PIN_MASK              (1 << TCK_PIN)
+#define TDI_PIN_MASK              (1 << TDI_PIN)
+#define TDO_PIN_MASK              (1 << TDO_PIN)
 
 #define JTAG_TX_BUFFER_SIZE       (1 * 1024)
 #define JTAG_RX_BUFFER_SIZE       (4096)  //64  //1801
@@ -256,6 +259,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 {
   uint8_t tx_data;
   uint8_t rx_data;
+  uint32_t output_pin_mask;
   uint64_t tmpt = mtimer_get_time_us();
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
   register uint32_t bitbang = 0;
@@ -336,15 +340,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           mpsse_status = MPSSE_RCV_LENGTH_2;
         }
         else {
-          if ((jtag_cmd & DSC_WRITE_TMS) != 0U) {
-            mpsse_status = MPSSE_TMS_OUT;
-          }
-          else if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
-            mpsse_status = MPSSE_TRANSMIT_BIT_MSB;
-          }
-          else {
-            mpsse_status = MPSSE_TRANSMIT_BIT_LSB;
-          }
+          mpsse_status = MPSSE_TRANSMIT_BIT;
         }
         break;
 
@@ -383,16 +379,16 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           if (rx_data & (1 << i)) {
             //TDI_HIGH;
-            bitbang |= (1 << TDI_PIN);
+            bitbang |= TDI_PIN_MASK;
           } else {
             //TDI_LOW;
-            bitbang &= ~(1 << TDI_PIN);
+            bitbang &= ~TDI_PIN_MASK;
           }
           *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
-          bitbang |= (1 << TCK_PIN);
+          bitbang |= TCK_PIN_MASK;
           *gpio_out = bitbang;
           DELAY_HIGH();
 
@@ -401,7 +397,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           }
 
           //TCK_LOW;
-          bitbang &= ~(1 << TCK_PIN);
+          bitbang &= ~TCK_PIN_MASK;
           *gpio_out = bitbang;
         }
 
@@ -417,127 +413,59 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         break;
 
-      case MPSSE_TRANSMIT_BIT_LSB:
+      case MPSSE_TRANSMIT_BIT:
         rx_data = jtag_rx_buffer[jtag_rx_pos++];
         tx_data = 0;
         bitbang = *gpio_out;
 
-        do {
-          if (rx_data & 0x01) {
+        if ((jtag_cmd & DSC_WRITE_TMS) != 0U) {
+          output_pin_mask = TMS_PIN_MASK;
+          if ((rx_data & (1 << 7)) != 0U) {
             //TDI_HIGH;
-            bitbang |= (1 << TDI_PIN);
-          } else {
+            bitbang |= TDI_PIN_MASK;
+          }
+          else {
             //TDI_LOW;
-            bitbang &= ~(1 << TDI_PIN);
+            bitbang &= ~TDI_PIN_MASK;
           }
-          *gpio_out = bitbang;
-          DELAY_LOW();
-
-          //TCK_HIGH;
-          bitbang |= (1 << TCK_PIN);
-          *gpio_out = bitbang;
-          DELAY_HIGH();
-
-          rx_data >>= 1;
-          tx_data >>= 1;
-
-          if (TDO != 0U) {
-            tx_data |= 0x80;
-          }
-
-          //TCK_LOW;
-          bitbang &= ~(1 << TCK_PIN);
-          *gpio_out = bitbang;
-        } while (mpsse_length-- > 0U);
-
-        if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(tx_data);
-        }
-
-        mpsse_status = MPSSE_IDLE;
-        break;
-
-      case MPSSE_TRANSMIT_BIT_MSB:
-        rx_data = jtag_rx_buffer[jtag_rx_pos++];
-        tx_data = 0;
-        bitbang = *gpio_out;
-
-        do {
-          if (rx_data & 0x80) {
-            //TDI_HIGH;
-            bitbang |= (1 << TDI_PIN);
-          } else {
-            //TDI_LOW;
-            bitbang &= ~(1 << TDI_PIN);
-          }
-          *gpio_out = bitbang;
-          DELAY_LOW();
-
-          //TCK_HIGH;
-          bitbang |= (1 << TCK_PIN);
-          *gpio_out = bitbang;
-          DELAY_HIGH();
-
-          rx_data <<= 1;
-          tx_data <<= 1;
-
-          if (TDO != 0U) {
-            tx_data |= 0x01;
-          }
-
-          //TCK_LOW;
-          bitbang &= ~(1 << TCK_PIN);
-          *gpio_out = bitbang;
-        } while (mpsse_length-- > 0U);
-
-        if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(tx_data);
-        }
-
-        mpsse_status = MPSSE_IDLE;
-        break;
-
-      case MPSSE_TMS_OUT:
-        rx_data = jtag_rx_buffer[jtag_rx_pos++];
-        tx_data = 0;
-        bitbang = *gpio_out;
-
-        if ((rx_data & (1 << 7)) != 0U) {
-          //TDI_HIGH;
-          bitbang |= 1 << TDI_PIN;
         }
         else {
-          //TDI_LOW;
-          bitbang &= ~(1 << TDI_PIN);
+          output_pin_mask = TDI_PIN_MASK;
         }
 
-        do {
-          if (rx_data & 0x01) {
-            //TMS_HIGH;
-            bitbang |= (1 << TMS_PIN);
+        for (uint32_t bit = 0; bit <= mpsse_length; ++bit) {
+          uint32_t i;
+
+          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
+            i = 7U - bit;
+          }
+          else {
+            i = bit;
+          }
+
+          if (rx_data & (1 << i)) {
+            //TDI_HIGH;
+            bitbang |= output_pin_mask;
           } else {
-            //TMS_LOW;
-            bitbang &= ~(1 << TMS_PIN);
+            //TDI_LOW;
+            bitbang &= ~output_pin_mask;
           }
           *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
-          bitbang |= (1 << TCK_PIN);
+          bitbang |= TCK_PIN_MASK;
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          rx_data >>= 1;
-          tx_data >>= 1;
-
           if (TDO != 0U) {
-            tx_data |= 0x80;
+            tx_data |= 1 << i;
           }
 
           //TCK_LOW;
-          bitbang &= ~(1 << TCK_PIN);
+          bitbang &= ~TCK_PIN_MASK;
           *gpio_out = bitbang;
-        } while (mpsse_length-- > 0);
+        };
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
