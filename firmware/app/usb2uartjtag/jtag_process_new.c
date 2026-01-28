@@ -47,12 +47,11 @@
 #define MPSSE_IDLE                0
 #define MPSSE_RCV_LENGTH_1        1
 #define MPSSE_RCV_LENGTH_2        2
-#define MPSSE_TRANSMIT_BYTE_LSB   3
-#define MPSSE_TRANSMIT_BYTE_MSB   4
-#define MPSSE_TRANSMIT_BIT_LSB    5
-#define MPSSE_TRANSMIT_BIT_MSB    6
-#define MPSSE_TMS_OUT             7
-#define MPSSE_RUN_TEST            8
+#define MPSSE_TRANSMIT_BYTE       3
+#define MPSSE_TRANSMIT_BIT_LSB    4
+#define MPSSE_TRANSMIT_BIT_MSB    5
+#define MPSSE_TMS_OUT             6
+#define MPSSE_RUN_TEST            7
 
 /* Data Shifting Command Bit Definitions */
 #define DSC_NVE_CLK_ON_WR         (1UL << 0)
@@ -255,8 +254,8 @@ void usbd_cdc_jtag_in(uint8_t ep)
 
 ATTR_CLOCK_SECTION void jtag_process(void)
 {
-  uint8_t  tx_data;
-  uint32_t rx_data = 0;
+  uint8_t tx_data;
+  uint8_t rx_data;
   uint64_t tmpt = mtimer_get_time_us();
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
   register uint32_t bitbang = 0;
@@ -283,61 +282,51 @@ ATTR_CLOCK_SECTION void jtag_process(void)
     switch (mpsse_status) {
       case MPSSE_IDLE:
         jtag_cmd = jtag_rx_buffer[jtag_rx_pos++];
-        switch (jtag_cmd) {
-          /* Instructions*/
-          case 0x80:
-          case 0x82:/* set data bit as output, we just nop it */
-            jtag_rx_pos += 2U;
-            break;
-          case 0x81:
-          case 0x83:/* dummy read back 8pins data, and send to usb */
-            jtag_write(0U);
-            break;
-          case 0x86: /* Clock Divisor, 0xValueL, 0xValueH; CLK=30M/Val */
-            //not support, we fixed 2.5MHz, 400ns period, 200ns each
-            jtag_rx_pos += 2U;
-            break;
-          case 0x8e:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bit
-            jtag_rx_pos += 1U;
-            break;
-          case 0x8f:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bytes
-          case 0x9c:	//Allows for a clock to be output without transferring data until a logic 1 input on GPIOL1 stops the clock or a set number of clock pulses are sent. Clocks counted in terms of numbers of bytes
-          case 0x9d:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock or a set number of clock pulses are sent. Clocks counted in terms of numbers of bytes
-            jtag_rx_pos += 2U;
-            break;
-          case 0x84:  //This will connect the TDI/DO output to the TDO/DI input for loopback testing.
-          case 0x85:  //This will disconnect the TDI output from the TDO input for loopback testing.
-          case 0x87:  //Send immediate. This will make the chip flush its buffer back to the PC.
-          case 0x88:  //This will cause the MPSSE controller to wait until GPIOL1 (JTAG) or I/O1 (CPU) is high.
-          case 0x89:  //This will cause the controller to wait until GPIOL1 (JTAG) or I/O1 (CPU) is low.
-          case 0x8a:	//Disables the clk divide by 5 to allow for a 60MHz master clock
-          case 0x8b:	//Enables the clk divide by 5 to allow for backward compatibility with FT2232D
-          case 0x8c:	//Enables 3 phase data clocking. Used by I2C interfaces to allow data on both clock edges.
-          case 0x8d:	//Disables 3 phase data clocking.
-          case 0x94:	//Allows for a clock to be output without transferring data until a logic 1 input on GPIOL1 stops the clock
-          case 0x95:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock.
-          case 0x96:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock.
-          case 0x97:	//Disable adaptive clocking
-            break;
-
-          /* Data Shifting Command */
-          case 0x11:
-          case 0x13:
-          case 0x19:
-          case 0x1b:
-          case 0x31:
-          case 0x33:
-          case 0x39:
-          case 0x3b:
-          case 0x4b:
-          case 0x6b:
-            mpsse_status = MPSSE_RCV_LENGTH_1;
-            break;
-
-          default:
-            jtag_write(0xFA);
-            jtag_write(jtag_cmd);
-            break;
+        if ((jtag_cmd & DSC_INSTRACTION) == 0U) {
+          mpsse_status = MPSSE_RCV_LENGTH_1;
+        }
+        else {
+          switch (jtag_cmd) {
+            /* Instructions*/
+            case 0x80:
+            case 0x82:/* set data bit as output, we just nop it */
+              jtag_rx_pos += 2U;
+              break;
+            case 0x81:
+            case 0x83:/* dummy read back 8pins data, and send to usb */
+              jtag_write(0U);
+              break;
+            case 0x86: /* Clock Divisor, 0xValueL, 0xValueH; CLK=30M/Val */
+              //not support, we fixed 2.5MHz, 400ns period, 200ns each
+              jtag_rx_pos += 2U;
+              break;
+            case 0x8e:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bit
+              jtag_rx_pos += 1U;
+              break;
+            case 0x8f:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bytes
+            case 0x9c:	//Allows for a clock to be output without transferring data until a logic 1 input on GPIOL1 stops the clock or a set number of clock pulses are sent. Clocks counted in terms of numbers of bytes
+            case 0x9d:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock or a set number of clock pulses are sent. Clocks counted in terms of numbers of bytes
+              jtag_rx_pos += 2U;
+              break;
+            case 0x84:  //This will connect the TDI/DO output to the TDO/DI input for loopback testing.
+            case 0x85:  //This will disconnect the TDI output from the TDO input for loopback testing.
+            case 0x87:  //Send immediate. This will make the chip flush its buffer back to the PC.
+            case 0x88:  //This will cause the MPSSE controller to wait until GPIOL1 (JTAG) or I/O1 (CPU) is high.
+            case 0x89:  //This will cause the controller to wait until GPIOL1 (JTAG) or I/O1 (CPU) is low.
+            case 0x8a:	//Disables the clk divide by 5 to allow for a 60MHz master clock
+            case 0x8b:	//Enables the clk divide by 5 to allow for backward compatibility with FT2232D
+            case 0x8c:	//Enables 3 phase data clocking. Used by I2C interfaces to allow data on both clock edges.
+            case 0x8d:	//Disables 3 phase data clocking.
+            case 0x94:	//Allows for a clock to be output without transferring data until a logic 1 input on GPIOL1 stops the clock
+            case 0x95:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock.
+            case 0x96:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock.
+            case 0x97:	//Disable adaptive clocking
+              break;
+            default:
+              jtag_write(0xFA);
+              jtag_write(jtag_cmd);
+              break;
+          }
         }
         break;
 
@@ -368,21 +357,31 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         else
 #endif
-          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
-            mpsse_status = MPSSE_TRANSMIT_BYTE_MSB;
-          }
-          else {
-            mpsse_status = MPSSE_TRANSMIT_BYTE_LSB;
-          }
+//          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
+//            mpsse_status = MPSSE_TRANSMIT_BYTE_MSB;
+//          }
+//          else {
+//            mpsse_status = MPSSE_TRANSMIT_BYTE_LSB;
+//          }
+        mpsse_status = MPSSE_TRANSMIT_BYTE;
         break;
 
-      case MPSSE_TRANSMIT_BYTE_LSB:
+      case MPSSE_TRANSMIT_BYTE:
         rx_data = jtag_rx_buffer[jtag_rx_pos++];
         tx_data = 0;
         bitbang = *gpio_out;
 
-        for (uint32_t i = 8; i ; i--) {
-          if (rx_data & 0x01) {
+        for (uint32_t bit = 0U; bit < 8U; ++bit) {
+          uint32_t i;
+
+          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
+            i = 7U - bit;
+          }
+          else {
+            i = bit;
+          }
+
+          if (rx_data & (1 << i)) {
             //TDI_HIGH;
             bitbang |= (1 << TDI_PIN);
           } else {
@@ -397,56 +396,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
           DELAY_HIGH();
 
-          rx_data >>= 1;
-          tx_data >>= 1;
-
           if (TDO != 0U) {
-            tx_data |= 0x80;
-          }
-
-          //TCK_LOW;
-          bitbang &= ~(1 << TCK_PIN);
-          *gpio_out = bitbang;
-        }
-
-        if ((jtag_cmd & DSC_READ_TDO) != 0U) {
-          jtag_write(tx_data);
-        }
-
-        if (mpsse_length > 0U) {
-          --mpsse_length;
-        }
-        else {
-          mpsse_status = MPSSE_IDLE;
-        }
-        break;
-
-      case MPSSE_TRANSMIT_BYTE_MSB:
-        rx_data = jtag_rx_buffer[jtag_rx_pos++];
-        tx_data = 0;
-        bitbang = *gpio_out;
-
-        for (uint32_t i = 8; i ; i--) {
-          if (rx_data & 0x80) {
-            //MOSI_HIGH;
-            bitbang |= (1 << TDI_PIN);
-          } else {
-            //TDI_LOW;
-            bitbang &= ~(1 << TDI_PIN);
-          }
-          *gpio_out = bitbang;
-          DELAY_LOW();
-
-          //TCK_HIGH;
-          bitbang |= (1 << TCK_PIN);
-          *gpio_out = bitbang;
-          DELAY_HIGH();
-
-          rx_data <<= 1;
-          tx_data <<= 1;
-
-          if (TDO != 0U) {
-            tx_data |= 0x01;
+            tx_data |= 1 << i;
           }
 
           //TCK_LOW;
