@@ -1,8 +1,9 @@
 /**
- * @file usbd_ftdi.h
+ * @file io_cfg.h
  * @brief 
  * 
  * Copyright (c) 2021 Sipeed team
+ * Copyright (C) 2026 Sergey Koshkin <koshkin.sergey@gmail.com>
  * 
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with

@@ -1,8 +1,9 @@
 /**
- * @file uart_interface.h
+ * @file jtag_process_new.c
  * @brief 
  * 
  * Copyright (c) 2021 Sipeed team
+ * Copyright (C) 2026 Sergey Koshkin <koshkin.sergey@gmail.com>
  * 
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -20,7 +21,6 @@
  * under the License.
  * 
  */
-
 
 #include "hal_usb.h"
 #include "usbd_core.h"
@@ -40,13 +40,9 @@
 
 #define PWM_CH                  3 //TCK pin num %5
 
-#define TMS_HIGH    ((*(volatile uint32_t *)0x40000188) |= (1<<TMS_PIN))
-#define TMS_LOW     ((*(volatile uint32_t *)0x40000188) &= (~(1<<TMS_PIN)))
-#define TDI_HIGH    ((*(volatile uint32_t *)0x40000188) |= (1<<TDI_PIN))
-#define TDI_LOW     ((*(volatile uint32_t *)0x40000188) &= (~(1<<TDI_PIN)))
-#define TCK_HIGH    ((*(volatile uint32_t *)0x40000188) |= (1<<TCK_PIN))
-#define TCK_LOW     ((*(volatile uint32_t *)0x40000188) &= (~(1<<TCK_PIN)))
-#define TDO         ((*(volatile uint32_t *)0x40000180) & (1<<TDO_PIN))
+#define GPIO_IN_ADDR            ((volatile uint32_t *)0x40000180)
+#define GPIO_OUT_ADDR           ((volatile uint32_t *)0x40000188)
+#define TDO                     (*GPIO_IN_ADDR & (1 << TDO_PIN))
 
 #define MPSSE_IDLE                0
 #define MPSSE_RCV_LENGTH_BYTE     1
@@ -147,7 +143,6 @@ static void pwm_start(void)
 
 static void pwm_stop(void)
 {
-
     PWM_Channel_Disable(PWM_CH);
 
     GLB_GPIO_Cfg_Type gpio_cfg;
@@ -180,24 +175,22 @@ void pwm_init(void)
 
 void jtag_gpio_init(void)
 {
-    gpio_set_mode(TMS_PIN, GPIO_OUTPUT_MODE);
-    gpio_set_mode(TDI_PIN, GPIO_OUTPUT_MODE);
-    gpio_set_mode(TCK_PIN, GPIO_OUTPUT_MODE);
-    gpio_set_mode(TDO_PIN, GPIO_INPUT_MODE);
+  gpio_write(TMS_PIN, 0U);
+  gpio_set_mode(TMS_PIN, GPIO_OUTPUT_MODE);
+  gpio_write(TDI_PIN, 0U);
+  gpio_set_mode(TDI_PIN, GPIO_OUTPUT_MODE);
+  gpio_write(TCK_PIN, 0U);
+  gpio_set_mode(TCK_PIN, GPIO_OUTPUT_MODE);
+  gpio_set_mode(TDO_PIN, GPIO_INPUT_MODE);
 
-    TMS_LOW;
-    TDI_LOW;
-    TCK_LOW;
 #if GOWIN_INT_FLASH_QUIRK 
-    pwm_init();
+  pwm_init();
 #endif
 }
 
-volatile uint64_t last_rcv = 0;
-volatile int doing_flag = 0; 
-volatile int ef_flag = 0; 
-volatile int ef_cnt = 0; 
-
+static volatile uint64_t last_rcv = 0;
+static volatile int doing_flag = 0;
+static volatile int ef_flag = 0;
 
 #if GW_DBG
 //编程包头特点 
@@ -222,9 +215,8 @@ void usbd_cdc_jtag_out(uint8_t ep)
         uint8_t* p0 = jtag_rx_buffer+jtag_rx_len;
         uint8_t* p = jtag_rx_buffer+jtag_rx_len+18;
         uint8_t* p1 = jtag_rx_buffer+jtag_rx_len+chunk-5;
-        if(!ef_flag && chunk>=21 && p[0]==0x1b && p[1]==0x06 && p[2]==0x71){
-            ef_flag = 1;
-            MSG("$");
+        if (!ef_flag && chunk>=21 && p[0]==0x1b && p[1]==0x06 && p[2]==0x71) {
+          ef_flag = 1;
         }
 
         if(ef_flag == 1) {  
@@ -290,16 +282,17 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 {
   uint8_t  usb_tx_data;
   uint32_t data = 0;
-  register uint32_t tmpt = mtimer_get_time_us();
-  register volatile uint32_t *pio __asm ("tp") = (volatile uint32_t *)0x40000180;
+  uint64_t tmpt = mtimer_get_time_us();
+  volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
   register uint32_t bitbang = 0;
 
-  if (!jtag_received_flag)
+  if (!jtag_received_flag) {
     return;
+  }
 
 #if GW_DBG
-  if(ef_flag == 0) {
-    if((tmpt-last_rcv<5) || (jtag_rx_len == 0))	//200us之后再统一处理, 加速整包的处理  //
+  if (ef_flag == 0) {
+    if (((tmpt-last_rcv) < 5U) || (jtag_rx_len == 0U))	//200us之后再统一处理, 加速整包的处理  //
     {
       return;
     }
@@ -419,7 +412,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BYTE_LSB:
         data = jtag_rx_buffer[jtag_rx_pos++];
         usb_tx_data = 0;
-        bitbang = pio[2];
+        bitbang = *gpio_out;
 
         for (uint32_t i = 8; i ; i--) {
           if (data & 0x01) {
@@ -429,12 +422,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             //TDI_LOW;
             bitbang &= ~(1 << TDI_PIN);
           }
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
           bitbang |= (1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_HIGH();
 
           data >>= 1;
@@ -446,7 +439,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           //TCK_LOW;
           bitbang &= ~(1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
         }
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
@@ -464,7 +457,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BYTE_MSB:
         data = jtag_rx_buffer[jtag_rx_pos++];
         usb_tx_data = 0;
-        bitbang = pio[2];
+        bitbang = *gpio_out;
 
         for (uint32_t i = 8; i ; i--) {
           if (data & 0x80) {
@@ -474,12 +467,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             //TDI_LOW;
             bitbang &= ~(1 << TDI_PIN);
           }
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
           bitbang |= (1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_HIGH();
 
           data <<= 1;
@@ -491,7 +484,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           //TCK_LOW;
           bitbang &= ~(1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
         }
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
@@ -509,7 +502,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BIT_LSB:
         data = jtag_rx_buffer[jtag_rx_pos++];
         usb_tx_data = 0;
-        bitbang = pio[2];
+        bitbang = *gpio_out;
 
         do {
           if (data & 0x01) {
@@ -519,12 +512,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             //TDI_LOW;
             bitbang &= ~(1 << TDI_PIN);
           }
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
           bitbang |= (1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_HIGH();
 
           data >>= 1;
@@ -536,7 +529,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           //TCK_LOW;
           bitbang &= ~(1<<TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
         } while ((mpsse_shortlen--) > 0U);
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
@@ -549,7 +542,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BIT_MSB:
         data = jtag_rx_buffer[jtag_rx_pos++];
         usb_tx_data = 0;
-        bitbang = pio[2];
+        bitbang = *gpio_out;
 
         do {
           if (data & 0x80) {
@@ -559,12 +552,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             //TDI_LOW;
             bitbang &= ~(1 << TDI_PIN);
           }
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
           bitbang |= (1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_HIGH();
 
           data <<= 1;
@@ -576,7 +569,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           //TCK_LOW;
           bitbang &= ~(1<<TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
         } while ((mpsse_shortlen--) > 0U);
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
@@ -589,7 +582,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TMS_OUT:
         data = jtag_rx_buffer[jtag_rx_pos++];
         usb_tx_data = 0;
-        bitbang = pio[2];
+        bitbang = *gpio_out;
 
         if ((data & (1 << 7)) != 0U) {
           //TDI_HIGH;
@@ -608,12 +601,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             //TMS_LOW;
             bitbang &= ~(1 << TMS_PIN);
           }
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_LOW();
 
           //TCK_HIGH;
           bitbang |= (1 << TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
           DELAY_HIGH();
 
           data >>= 1;
@@ -625,7 +618,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
           //TCK_LOW;
           bitbang &= ~(1<<TCK_PIN);
-          pio[2] = bitbang;
+          *gpio_out = bitbang;
         } while ((mpsse_shortlen--) > 0);
 
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {

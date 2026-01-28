@@ -3,6 +3,7 @@
  * @brief 
  * 
  * Copyright (c) 2021 Sipeed team
+ * Copyright (C) 2026 Sergey Koshkin <koshkin.sergey@gmail.com>
  * 
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -20,7 +21,9 @@
  * under the License.
  * 
  */
+
 #include "hal_usb.h"
+#include "hal_mtimer.h"
 #include "usbd_core.h"
 #include "usbd_ftdi.h"
 #include "uart_interface.h"
@@ -101,7 +104,6 @@ static volatile uint32_t temp_tick2 = 0;	//tick for uart port
 static volatile uint32_t temp_tick1 = 0;	//tick for uart port
 uint64_t last_send = 0;
 
-extern  uint32_t mpsse_status;
 // UART RX -> USB IN
 uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep)
 {
