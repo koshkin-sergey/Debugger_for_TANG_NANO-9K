@@ -74,42 +74,23 @@
 //6.94ns every "nop"  
 #define DELAY() \
 {\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
 }
 
 #define DELAY_LOW() \
 {\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
 }
 
 #define DELAY_HIGH() \
 {\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");__asm volatile ("nop":::"memory");\
-	__asm volatile ("nop":::"memory");\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
+  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
 }
 
 uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
