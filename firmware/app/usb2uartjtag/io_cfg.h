@@ -23,7 +23,7 @@
  */
 #ifndef _IO_CFG_H
 #define _IO_CFG_H
- 
+
 #define UART_TXD_PIN              GPIO_PIN_26
 #define UART_RXD_PIN              GPIO_PIN_27
 
@@ -34,6 +34,20 @@
 #define TCK_PIN                   GPIO_PIN_23
 #define TDI_PIN                   GPIO_PIN_17
 #define TDO_PIN                   GPIO_PIN_15
+
+/* Configurable delay for clock generation */
+#define PIN_DELAY_CYCLES          3U  // Number of cycles for one iteration
+
+__ALWAYS_STATIC_INLINE
+void PIN_DELAY (uint32_t delay)
+{
+  __ASM volatile (
+    "0:               \n\t"
+    "addi %0, %0, -1  \n\t"
+    "bnez %0, 0b      \n"
+  : "+l" (delay) : : "cc"
+  );
+}
 
 #endif
 

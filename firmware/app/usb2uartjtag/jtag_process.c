@@ -22,23 +22,20 @@
  * 
  */
 
-#include "hal_usb.h"
-#include "usbd_core.h"
-#include "usbd_ftdi.h"
+#include <stdbool.h>
+#include <string.h>
+#include <stdint.h>
+
 #include "ring_buffer.h"
+#include "usb_dc.h"
 #include "hal_gpio.h"
-#include "hal_spi.h"
-#include "hal_pwm.h"
-#include "hal_mtimer.h"
-#include "bl702_glb.h"
+#include "hal_common.h"
 #include "bl702_gpio.h"
-#include "bl702_pwm.h"
 #include "io_cfg.h"
+#include "usbd_ftdi.h"
 
 #define GOWIN_INT_FLASH_QUIRK     0
-#define GW_DBG                    1
-
-#define PWM_CH                    3 //TCK pin num %5
+#define PWM_CH                    3
 
 #define GPIO_IN_ADDR              ((volatile uint32_t *)0x40000180)
 #define GPIO_OUT_ADDR             ((volatile uint32_t *)0x40000188)
@@ -67,34 +64,18 @@
 #define TDO_PIN_MASK              (1 << TDO_PIN)
 
 #define JTAG_TX_BUFFER_SIZE       (1 * 1024)
-#define JTAG_RX_BUFFER_SIZE       (4096)  //64  //1801
+#define JTAG_RX_BUFFER_SIZE       (64)
 
-//6.94ns every "nop"
-#define DELAY() \
-{\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-}
+// 6.94 ns every "nop"
+// 20.82 ns every one PIN_DELAY()
+#define DELAY_LOW()               PIN_DELAY(6)
+#define DELAY_HIGH()              PIN_DELAY(6)
+#define DELAY_RUN_TEST()          PIN_DELAY(60)
 
-#define DELAY_LOW() \
-{\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-}
+static uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
+static Ring_Buffer_Type jtag_tx_rb;
 
-#define DELAY_HIGH() \
-{\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-  __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();\
-}
-
-uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
-Ring_Buffer_Type jtag_tx_rb;
-
-uint8_t jtag_rx_buffer[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
+static uint8_t jtag_rx_buffer[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 static volatile uint32_t jtag_rx_len = 0;
 static volatile uint32_t jtag_rx_pos __attribute__((section(".tcm_data")));
 
@@ -105,26 +86,16 @@ static volatile uint32_t jtag_received_flag __attribute__((section(".tcm_data"))
 
 extern struct device *usb_fs;
 
-static void rb_lock(void)
-{
-    //disable_irq();
-}
-
-static void rb_unlock(void)
-{
-    //enable_irq();
-}
-
 static void jtag_write(uint8_t data)
 {
-    Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
+  Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
 }
 
 void jtag_ringbuffer_init(void)
 {
-    memset(jtag_tx_buffer, 0, JTAG_TX_BUFFER_SIZE);
-    /* init ring_buffer */
-    Ring_Buffer_Init(&jtag_tx_rb, jtag_tx_buffer, JTAG_TX_BUFFER_SIZE, rb_lock, rb_unlock);
+  memset(jtag_tx_buffer, 0, JTAG_TX_BUFFER_SIZE);
+  /* init ring_buffer */
+  Ring_Buffer_Init(&jtag_tx_rb, jtag_tx_buffer, JTAG_TX_BUFFER_SIZE, NULL, NULL);
 }
 
 #if GOWIN_INT_FLASH_QUIRK
@@ -189,70 +160,27 @@ void jtag_gpio_init(void)
 #endif
 }
 
-static volatile uint64_t last_rcv = 0;
-static volatile int doing_flag = 0;
-static volatile int ef_flag = 0;
-
-#if GW_DBG
-//编程包头特点 
-// 4b 03 03 1b 06 15 6b 00 01 4b 01 01 4b 05 00 4b 03 03 1b 06 71 6b 00 01
-// 4b 03 03 1b 06 15 6b 00 01 4b 01 01 4b 05 00 4b 03 03 1b 06 71 6b 00 01  4b 01 01 4b  05 00 4b 02
-// len>=21, idx=18: 1b 06 71
 void usbd_cdc_jtag_out(uint8_t ep)
 {
   uint32_t chunk;
-  //if (!jtag_received_flag)
-  if (!doing_flag) {
-    usbd_ep_read(ep, jtag_rx_buffer+jtag_rx_len, 64, &chunk);
-    if (chunk == 0) {
+
+  if (!jtag_received_flag) {
+    usbd_ep_read(ep, jtag_rx_buffer, JTAG_RX_BUFFER_SIZE, &chunk);
+    if (chunk == 0){
       return;
     }
-
-    //查找ef program标志 1b 06 71 6b 00 01
-    uint8_t* p = jtag_rx_buffer+jtag_rx_len+18;
-    uint8_t* p1 = jtag_rx_buffer+jtag_rx_len+chunk-5;
-    if (!ef_flag && chunk>=21 && p[0]==0x1b && p[1]==0x06 && p[2]==0x71) {
-      ef_flag = 1;
-    }
-
-    if (ef_flag == 1) {
-      if ((p1[0]==0x19 && p1[1]==0x01)) {
-        ef_flag = 0;
-      }
-    }
-
-    jtag_rx_len += chunk;
+    jtag_rx_len = chunk;
     jtag_rx_pos = 0;
     jtag_received_flag = true;
-    last_rcv = mtimer_get_time_us();
-    usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);	//表示处理好一帧？
   }
 }
-
-#else 
-void usbd_cdc_jtag_out(uint8_t ep)
-{
-    uint32_t chunk;
-    if (!jtag_received_flag) {	//在处理完之前的包后才进行下一次接收
-        usbd_ep_read(ep, jtag_rx_buffer, 64, &chunk);	
-        if (chunk == 0){
-            return;
-        }
-        jtag_rx_len = chunk;
-        // bflb_platform_dump(jtag_rx_buffer, jtag_rx_len);
-        jtag_rx_pos = 0;
-        jtag_received_flag = true;
-    }
-}
-#endif
 
 extern uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep);
 void usbd_cdc_jtag_in(uint8_t ep)
 {
-    if (jtag_rx_len==0) //(!jtag_received_flag)) //没有需要处理的接收内容时返回数据
-    {
-        usb_dc_ftdi_send_from_ringbuffer(usb_fs, &jtag_tx_rb, ep);
-    }
+  if (!jtag_received_flag) {
+    usb_dc_ftdi_send_from_ringbuffer(usb_fs, &jtag_tx_rb, ep);
+  }
 }
 
 ATTR_CLOCK_SECTION void jtag_process(void)
@@ -260,29 +188,16 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   uint8_t tx_data;
   uint8_t rx_data;
   uint32_t output_pin_mask;
-  uint64_t tmpt = mtimer_get_time_us();
+  uint32_t bitbang;
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
-  register uint32_t bitbang = 0;
 
   if (!jtag_received_flag) {
     return;
   }
 
-#if GW_DBG
-  if (ef_flag == 0) {
-    if (((tmpt-last_rcv) < 5U) || (jtag_rx_len == 0U)) {
-      return;
-    }
-  }
-  else {
-    return;
-  }
-#endif
-
-//  cpu_global_irq_disable();
-  __disable_irq();
-  doing_flag = 1;
   while(jtag_rx_pos < jtag_rx_len) {
+    cpu_global_irq_disable();
+
     switch (mpsse_status) {
       case MPSSE_IDLE:
         jtag_cmd = jtag_rx_buffer[jtag_rx_pos++];
@@ -353,12 +268,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         else
 #endif
-//          if ((jtag_cmd & DSC_LSB_FIRST) == 0U) {
-//            mpsse_status = MPSSE_TRANSMIT_BYTE_MSB;
-//          }
-//          else {
-//            mpsse_status = MPSSE_TRANSMIT_BYTE_LSB;
-//          }
         mpsse_status = MPSSE_TRANSMIT_BYTE;
         break;
 
@@ -482,7 +391,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         jtag_rx_pos++;
         mpsse_length--;
-        DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();DELAY();
+        DELAY_RUN_TEST();
         break;
 #endif
 
@@ -493,15 +402,9 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
     if (jtag_rx_pos >= jtag_rx_len) {
       jtag_received_flag = false;
-#if !GW_DBG
       usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);
-#endif
-      jtag_rx_len = 0;
     }
-  }
 
-  doing_flag = 0;
-  ef_flag = 0;
-  //  cpu_global_irq_enable();
-  __enable_irq();
+    cpu_global_irq_enable();
+  }
 }
