@@ -1,14 +1,10 @@
 # Description
 
-**RV-Debugger-BL702** is an opensource project that implement a JTAG+UART debugger with BL702C-A0.
+**Debugger_for_TANG_NANO-9K** is an opensource project that implement a JTAG+UART debugger for SiPEED TANG NANO 9K board with BL702C-A0.
 
-[BL702](https://www.bouffalolab.com/bl70X) is highly integrated BLE and Zigbee combo chipset for IoT applications, contains **32-bit RISC-V** CPU with FPU, frequency up to **144MHz**, with **132KB RAM** and **192 KB ROM**, 1Kb eFuse, **512KB embedded Flash**, USB2.0 FS device interface, and many other features.
+[BL702](https://en.bouffalolab.com/product/?type=detail&id=8) is highly integrated BLE and Zigbee combo chipset for IoT applications, contains **32-bit RISC-V** CPU with FPU, frequency up to **144MHz**, with **132KB RAM** and **192 KB ROM**, 1Kb eFuse, **512KB embedded Flash**, USB2.0 FS device interface, and many other features.
 
-The firmware implement is inspired by [open-ec](https://github.com/rgwan/open-ec), implement by Sipeed teams and community developers.
-
-The firmware emulate an [FT2232D](https://ftdichip.com/products/ft2232d/) device, defaultly implement an JTAG+UART debugger, and can be implement as a Dual-Serial Port debugger, a bluetooth debugger, etc. 
-
-Community Forum:  bbs.sipeed.com
+The firmware emulate an [FT2232D](https://ftdichip.com/products/ft2232d/) device, defaultly implement an JTAG+UART debugger, and can be implement as a Dual-Serial Port debugger, a bluetooth debugger, etc.
 
 # Hardware
 ## Offical Board
@@ -26,9 +22,6 @@ Assembly: [BL702_USB2JTAG_3610_asm.pdf](hardware/BL702_USB2JTAG_3610_asm.pdf)
 <img height=480 src="res/rv-debugger.png">
 <br />
 
-## Third-party Hardware
-
-TODO
 
 # Firmware
 ## build firmware
