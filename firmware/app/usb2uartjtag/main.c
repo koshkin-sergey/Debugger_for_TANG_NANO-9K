@@ -62,7 +62,6 @@ struct device *usb_fs;
 
 /************************  led ctrl functions  ************************/
 static uint32_t led_pins[2] = {LED0_PIN, LED1_PIN};
-static volatile uint8_t led_stat[2] = {0, 0};
 
 static void led_gpio_init(void)
 {
@@ -73,13 +72,11 @@ static void led_gpio_init(void)
 void led_set(uint8_t idx, uint8_t status)
 {
   gpio_write(led_pins[idx], !status);
-  led_stat[idx] = status;
 }
 
 void led_toggle(uint8_t idx)
 {
-  led_stat[idx] = !led_stat[idx];
-  gpio_write(led_pins[idx], !led_stat[idx]);
+  gpio_toggle(led_pins[idx]);
 }
 
 /************************  API for usbd_ftdi  ************************/
@@ -107,42 +104,42 @@ uint64_t last_send = 0;
 // UART RX -> USB IN
 uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep)
 {
-    uint8_t ep_idx;
-    uint32_t timeout = 0x00FFFFFF;
+  uint8_t ep_idx;
+  uint32_t timeout = 0x00FFFFFF;
 
-    ep_idx = USB_EP_GET_IDX(ep);
-    /* Check if IN ep */
-    if (USB_EP_GET_DIR(ep) != USB_EP_DIR_IN)
+  ep_idx = USB_EP_GET_IDX(ep);
+  /* Check if IN ep */
+  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_IN)
+  {
+    return (-USB_DC_EP_DIR_ERR);
+  }
+
+  while (!USB_Is_EPx_RDY_Free(ep_idx))
+  {
+    timeout--;
+    if (!timeout)
     {
-        return -USB_DC_EP_DIR_ERR;
+      MSG("ep%d wait free timeout\r\n", ep);
+      return (-USB_DC_EP_TIMEOUT_ERR);
     }
+  }
 
-    while (!USB_Is_EPx_RDY_Free(ep_idx))
-    {
-        timeout--;
-        if (!timeout)
-        {
-            MSG("ep%d wait free timeout\r\n", ep);
-            return -USB_DC_EP_TIMEOUT_ERR;
-        }
-    }
+  uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
 
-    uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
+  if ((USB_Get_EPx_TX_FIFO_CNT(ep_idx) == USB_FS_MAX_PACKET_SIZE) && Ring_Buffer_Get_Length(rb))
+  {
+    uint8_t ftdi_header[2] = {0x01,0x60};
 
-    if ((USB_Get_EPx_TX_FIFO_CNT(ep_idx) == USB_FS_MAX_PACKET_SIZE) && Ring_Buffer_Get_Length(rb))
-    {
-        uint8_t ftdi_header[2] = {0x01,0x60};
-		MSG("*");
-        memcopy_to_fifo((void *)addr,ftdi_header,2);
-        Ring_Buffer_Read_Callback(rb, USB_FS_MAX_PACKET_SIZE-2, memcopy_to_fifo, (void *)addr);
-        USB_Set_EPx_Rdy(ep_idx);
-		led_toggle(0);	//RX indication
-		last_send = mtimer_get_time_us();
-        return 0;
-    }
-    else
-    {
-		/*uint64_t Latency_Timer = (ep_idx - 1)==0?usbd_ftdi_get_latency_timer1():usbd_ftdi_get_latency_timer2();	//超时才发
+    memcopy_to_fifo((void *)addr,ftdi_header,2);
+    Ring_Buffer_Read_Callback(rb, USB_FS_MAX_PACKET_SIZE-2, memcopy_to_fifo, (void *)addr);
+    USB_Set_EPx_Rdy(ep_idx);
+    led_set(0, 0);  //RX indication
+    last_send = mtimer_get_time_us();
+    return (0);
+  }
+  else
+  {
+    /*uint64_t Latency_Timer = (ep_idx - 1)==0?usbd_ftdi_get_latency_timer1():usbd_ftdi_get_latency_timer2();	//超时才发
 		if(mtimer_get_time_us()-last_send>Latency_Timer*1000) {
 			uint8_t ftdi_header[2] = {0x01,0x60};       
 			memcopy_to_fifo((void *)addr,ftdi_header,2);
@@ -151,85 +148,71 @@ uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *
 			//MSG("Port%d refresh\r\n", ep_idx);
 			return -USB_DC_RB_SIZE_SMALL_ERR;
 		}*/
-		
-        if(ep_idx == CDC_IN_EP) //UART
-        {
-            if((uint32_t)(usbd_ftdi_get_sof_tick()-temp_tick2) >= usbd_ftdi_get_latency_timer2())
-            {
-                uint8_t ftdi_header[2] = {0x01,0x60};     
-                temp_tick2 = usbd_ftdi_get_sof_tick();                 
-                memcopy_to_fifo((void *)addr,ftdi_header,2);
-                USB_Set_EPx_Rdy(ep_idx);
-            }
-        }
-        else	//0x81, JTAG
-        {
-            //if((uint32_t)(usbd_ftdi_get_sof_tick()-temp_tick1) >= usbd_ftdi_get_latency_timer1())
-			//if(mpsse_status != 12)
-			//MSG("#");
-			if(mtimer_get_time_us()-last_send>1000)
-            {
-				uint8_t ftdi_header[2] = {0x01,0x60};     
-				temp_tick1 = usbd_ftdi_get_sof_tick();  				
-				memcopy_to_fifo((void *)addr,ftdi_header,2);
-				USB_Set_EPx_Rdy(ep_idx);
-			}
-        }
-        return -USB_DC_RB_SIZE_SMALL_ERR; 
-    }
 
+    if (ep_idx == CDC_IN_EP) {
+      if ((uint32_t)(usbd_ftdi_get_sof_tick()-temp_tick2) >= usbd_ftdi_get_latency_timer2()) {
+        uint8_t ftdi_header[2] = {0x01,0x60};
+        temp_tick2 = usbd_ftdi_get_sof_tick();
+        memcopy_to_fifo((void *)addr,ftdi_header,2);
+        USB_Set_EPx_Rdy(ep_idx);
+      }
+    }
+    else {
+      if(mtimer_get_time_us()-last_send>1000) {
+        uint8_t ftdi_header[2] = {0x01,0x60};
+        temp_tick1 = usbd_ftdi_get_sof_tick();
+        memcopy_to_fifo((void *)addr,ftdi_header,2);
+        USB_Set_EPx_Rdy(ep_idx);
+      }
+    }
+    return (-USB_DC_RB_SIZE_SMALL_ERR);
+  }
 }
 
 // USB OUT -> UART TX
 int usb_dc_ftdi_receive_to_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep)
 {
-    uint8_t ep_idx;
-    uint8_t recv_len;
-    uint32_t timeout = 0x00FFFFFF;
-    static bool overflow_flag = false;
+  uint8_t ep_idx;
+  uint8_t recv_len;
+  uint32_t timeout = 0x00FFFFFF;
+  static bool overflow_flag = false;
 
-    /* Check if OUT ep */
-    if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT)
-    {
-        //USB_DC_LOG_ERR("Wrong endpoint direction\r\n");
-        return -USB_DC_EP_DIR_ERR;
-    }
+  /* Check if OUT ep */
+  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT) {
+    //USB_DC_LOG_ERR("Wrong endpoint direction\r\n");
+    return (-USB_DC_EP_DIR_ERR);
+  }
 
-    ep_idx = USB_EP_GET_IDX(ep);
+  ep_idx = USB_EP_GET_IDX(ep);
 
-    while (!USB_Is_EPx_RDY_Free(ep_idx))
-    {
-        timeout--;
-        if (!timeout)
-        {
-            //USB_DC_LOG_ERR("ep%d wait free timeout\r\n", ep);
-            return -USB_DC_EP_TIMEOUT_ERR;
-        }
+  while (!USB_Is_EPx_RDY_Free(ep_idx)) {
+    timeout--;
+    if (!timeout) {
+      //USB_DC_LOG_ERR("ep%d wait free timeout\r\n", ep);
+      return (-USB_DC_EP_TIMEOUT_ERR);
     }
-    recv_len = USB_Get_EPx_RX_FIFO_CNT(ep_idx);
-    
-    /*if rx fifo count equal 0,it means last is send nack and ringbuffer is smaller than 64,
-    * so,if ringbuffer is larger than 64,set ack to recv next data.
-    */
-    if(overflow_flag && (Ring_Buffer_Get_Empty_Length(rb)>64) && (!recv_len))
-    {
-        overflow_flag = false;
-        USB_Set_EPx_Rdy(ep_idx);
-        return 0;
-    }
-    else
-    {
-        uint32_t addr = USB_BASE + 0x11C + (ep_idx - 1) * 0x10;
-        Ring_Buffer_Write_Callback(rb, recv_len, fifocopy_to_mem, (void *)addr);
+  }
+  recv_len = USB_Get_EPx_RX_FIFO_CNT(ep_idx);
 
-        if(Ring_Buffer_Get_Empty_Length(rb) < 64)
-        {
-            overflow_flag = true;
-            return -USB_DC_RB_SIZE_SMALL_ERR;
-        }
-        USB_Set_EPx_Rdy(ep_idx);
-        return 0;
+  /*if rx fifo count equal 0,it means last is send nack and ringbuffer is smaller than 64,
+   * so,if ringbuffer is larger than 64,set ack to recv next data.
+   */
+  if (overflow_flag && (Ring_Buffer_Get_Empty_Length(rb)>64) && (!recv_len)) {
+    overflow_flag = false;
+    USB_Set_EPx_Rdy(ep_idx);
+    return (0);
+  }
+  else {
+    uint32_t addr = USB_BASE + 0x11C + (ep_idx - 1) * 0x10;
+    Ring_Buffer_Write_Callback(rb, recv_len, fifocopy_to_mem, (void *)addr);
+
+    if(Ring_Buffer_Get_Empty_Length(rb) < 64) {
+      overflow_flag = true;
+      return (-USB_DC_RB_SIZE_SMALL_ERR);
     }
+    USB_Set_EPx_Rdy(ep_idx);
+    return (0);
+  }
 }
 
 
@@ -289,53 +272,56 @@ static void hexarr2string(uint8_t *hexarray,int length,uint8_t *string)
 
 int main(void)
 {
-    uint8_t chipid[8];
-    uint8_t chipid2[6];
-    GLB_Select_Internal_Flash();
-    bflb_platform_init(0);
-    uart_ringbuffer_init();
-    uart1_init();
-//    uart1_set_dtr_rts(UART_DTR_PIN,UART_RTS_PIN);
-//    uart1_dtr_init();
-//    uart1_rts_init();
-    led_gpio_init();
-    led_set(0, 1);	//led0 for RX/TX indication
-    led_set(1, 1);	//led1 for Power indication
-    jtag_ringbuffer_init();
-    jtag_gpio_init();
-    EF_Ctrl_Read_Chip_ID(chipid);
-    hexarr2string(&chipid[2],3,chipid2);
-    // bflb_platform_dump(chipid,8);
-    // bflb_platform_dump(chipid2,6);
-    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24     ] = chipid2[0];
-    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 2 ] = chipid2[1];
-    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 4 ] = chipid2[2];
-    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 6 ] = chipid2[3];
-    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 8 ] = chipid2[4];
-    cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 10] = chipid2[5];
-    usbd_desc_register(cdc_descriptor);
+  uint8_t chipid[8];
+  uint8_t chipid2[6];
+  GLB_Select_Internal_Flash();
+  bflb_platform_init(0);
+  uart_ringbuffer_init();
+  uart1_init();
+//  uart1_set_dtr_rts(UART_DTR_PIN,UART_RTS_PIN);
+//  uart1_dtr_init();
+//  uart1_rts_init();
+  led_gpio_init();
+  led_set(0, 1);	//led0 for RX/TX indication
+  led_set(1, 1);	//led1 for Power indication
+  jtag_ringbuffer_init();
+  jtag_gpio_init();
+  EF_Ctrl_Read_Chip_ID(chipid);
+  hexarr2string(&chipid[2],3,chipid2);
+//  bflb_platform_dump(chipid,8);
+//  bflb_platform_dump(chipid2,6);
+  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24     ] = chipid2[0];
+  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 2 ] = chipid2[1];
+  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 4 ] = chipid2[2];
+  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 6 ] = chipid2[3];
+  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 8 ] = chipid2[4];
+  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 10] = chipid2[5];
+  usbd_desc_register(cdc_descriptor);
 
-    usbd_ftdi_add_interface(&cdc_class0,&cdc_data_intf0);
-    usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_out_ep0);
-    usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_in_ep0);
+  usbd_ftdi_add_interface(&cdc_class0,&cdc_data_intf0);
+  usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_out_ep0);
+  usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_in_ep0);
 
-    usbd_ftdi_add_interface(&cdc_class1,&cdc_data_intf1);
-    usbd_interface_add_endpoint(&cdc_data_intf1,&cdc_out_ep1);
-    usbd_interface_add_endpoint(&cdc_data_intf1,&cdc_in_ep1);
+  usbd_ftdi_add_interface(&cdc_class1,&cdc_data_intf1);
+  usbd_interface_add_endpoint(&cdc_data_intf1,&cdc_out_ep1);
+  usbd_interface_add_endpoint(&cdc_data_intf1,&cdc_in_ep1);
 
-    usb_fs = usb_dc_init();
-    if (usb_fs)
-    {
-        device_control(usb_fs, DEVICE_CTRL_SET_INT, (void *)(USB_SOF_IT|USB_EP2_DATA_OUT_IT | USB_EP1_DATA_IN_IT|USB_EP4_DATA_OUT_IT|USB_EP3_DATA_IN_IT));
-    }
-    while(!usb_device_is_configured()){};
-    
-	led_toggle(0);
-    while (1)
-    {
-        uart_send_from_ringbuffer();
-        jtag_process();
-    }
-	
-	return 0;
+  usb_fs = usb_dc_init();
+  if (usb_fs) {
+    device_control(usb_fs, DEVICE_CTRL_SET_INT, (void *)(USB_SOF_IT|USB_EP2_DATA_OUT_IT | USB_EP1_DATA_IN_IT|USB_EP4_DATA_OUT_IT|USB_EP3_DATA_IN_IT));
+  }
+
+  while (!usb_device_is_configured()) {
+    __NOP();
+  };
+
+  led_set(0, 0);
+
+  while (1)
+  {
+    uart_send_from_ringbuffer();
+    jtag_process();
+  }
+
+  return (0);
 }

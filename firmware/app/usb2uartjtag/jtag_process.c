@@ -72,6 +72,8 @@
 #define DELAY_HIGH()              PIN_DELAY(6)
 #define DELAY_RUN_TEST()          PIN_DELAY(60)
 
+extern void led_set(uint8_t idx, uint8_t status);
+
 static uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 static Ring_Buffer_Type jtag_tx_rb;
 
@@ -169,6 +171,7 @@ void usbd_cdc_jtag_out(uint8_t ep)
     if (chunk == 0){
       return;
     }
+    led_set(0, 1);  //TX indication
     jtag_rx_len = chunk;
     jtag_rx_pos = 0;
     jtag_received_flag = true;
