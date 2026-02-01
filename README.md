@@ -7,20 +7,13 @@
 The firmware emulate an [FT2232D](https://ftdichip.com/products/ft2232d/) device, defaultly implement an JTAG+UART debugger, and can be implement as a Dual-Serial Port debugger, a bluetooth debugger, etc.
 
 # Hardware
-## Offical Board
+## Tang Nano 9K
 
-Sipeed RV-Debugger-Plus  (BL702C-A0)
+The Tang Nano 9K, powered by [Gowin's](https://www.gowinsemi.com/en/) GW1NR-9 FPGA chip, is a versatile and feature-rich development board. It features several often used connectors, including HDMI, RGB screen, and SPI screen interfaces, as well as a 32Mbit SPI flash and six LEDs. It has 8640 LUT4 logic units, an onboard 27MHz clock and 2 PLLs meaning, as well as basic FPGA designs, it can also be used for full risc-v softcores such as PicoRV.
 
-Purchase link: Aliexpress
+![](res/9K.png)
 
-Schematic: [BL702_USB2JTAG_3610_sch.pdf](hardware/BL702_USB2JTAG_3610_sch.pdf)
-
-Assembly: [BL702_USB2JTAG_3610_asm.pdf](hardware/BL702_USB2JTAG_3610_asm.pdf)
-
-(LED0 is the led close to edge, indicate for RX)
-
-<img height=480 src="res/rv-debugger.png">
-<br />
+Schematic: [Tang_nano_9K_3674_schematics.pdf](res/Tang_nano_9K_3674_schematics.pdf)
 
 
 # Firmware
@@ -115,9 +108,6 @@ JTAG function is verified for :
 - RV32 Xuantie E906/E907
 - RV64 Xuantie C906
 - Gowin FPGA GW1N-1, GW1NS-4C. (need enable GOWIN_INT_FLASH_QUIRK)
-
-## usb2dualuart
-TODO.
 
 
 # Project Structure
