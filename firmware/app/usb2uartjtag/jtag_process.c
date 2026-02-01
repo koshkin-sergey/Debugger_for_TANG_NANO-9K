@@ -44,9 +44,11 @@
 #define MPSSE_IDLE                0
 #define MPSSE_RCV_LENGTH_1        1
 #define MPSSE_RCV_LENGTH_2        2
-#define MPSSE_TRANSMIT_BYTE       3
-#define MPSSE_TRANSMIT_BIT        4
-#define MPSSE_RUN_TEST            5
+#define MPSSE_RCV_VALUE_L         3
+#define MPSSE_RCV_VALUE_H         4
+#define MPSSE_TRANSMIT_BYTE       5
+#define MPSSE_TRANSMIT_BIT        6
+#define MPSSE_RUN_TEST            7
 
 /* Data Shifting Command Bit Definitions */
 #define DSC_NVE_CLK_ON_WR         (1UL << 0)
@@ -68,12 +70,13 @@
 
 // 6.94 ns every "nop"
 // 20.82 ns every one PIN_DELAY()
-#define DELAY_LOW()               PIN_DELAY(6)
-#define DELAY_HIGH()              PIN_DELAY(6)
+#define DELAY_LOW()               PIN_DELAY(delay_val)
+#define DELAY_HIGH()              PIN_DELAY(delay_val)
 #define DELAY_RUN_TEST()          PIN_DELAY(60)
 
 extern void led_set(uint8_t idx, uint8_t status);
 
+static uint32_t delay_val;
 static uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 static Ring_Buffer_Type jtag_tx_rb;
 
@@ -81,9 +84,10 @@ static uint8_t jtag_rx_buffer[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_
 static volatile uint32_t jtag_rx_len = 0;
 static volatile uint32_t jtag_rx_pos __attribute__((section(".tcm_data")));
 
-static uint32_t mpsse_length __attribute__((section(".tcm_data"))) = 0;
+static uint16_t mpsse_length __attribute__((section(".tcm_data")));
+static uint16_t mpsse_value  __attribute__((section(".tcm_data")));
 static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
-static uint32_t jtag_cmd __attribute__((section(".tcm_data"))) = 0;
+static uint32_t jtag_cmd __attribute__((section(".tcm_data")));
 static volatile uint32_t jtag_received_flag __attribute__((section(".tcm_data"))) = false;
 
 extern struct device *usb_fs;
@@ -218,9 +222,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             case 0x83:/* dummy read back 8pins data, and send to usb */
               jtag_write(0U);
               break;
-            case 0x86: /* Clock Divisor, 0xValueL, 0xValueH; CLK=30M/Val */
-              //not support, we fixed 2.5MHz, 400ns period, 200ns each
-              jtag_rx_pos += 2U;
+            case 0x86: /* Clock Divisor, 0xValueL, 0xValueH */
+              mpsse_status = MPSSE_RCV_VALUE_L;
               break;
             case 0x8e:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bit
               jtag_rx_pos += 1U;
@@ -263,7 +266,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_RCV_LENGTH_2:
-        mpsse_length |= (jtag_rx_buffer[jtag_rx_pos++] << 8) & 0xff00;
+        mpsse_length |= jtag_rx_buffer[jtag_rx_pos++] << 8;
 #if GOWIN_INT_FLASH_QUIRK
         if ((mpsse_length >=2000) && (jtag_cmd & (1 << 5)) == 0) {
           pwm_start();
@@ -272,6 +275,17 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         else
 #endif
         mpsse_status = MPSSE_TRANSMIT_BYTE;
+        break;
+
+      case MPSSE_RCV_VALUE_L:
+        mpsse_value = jtag_rx_buffer[jtag_rx_pos++];
+        mpsse_status = MPSSE_RCV_VALUE_H;
+        break;
+
+      case MPSSE_RCV_VALUE_H:
+        mpsse_value |= jtag_rx_buffer[jtag_rx_pos++] << 8;
+        delay_val = (mpsse_value + 1U) * 1000 / (12 * PIN_DELAY_NS);
+        mpsse_status = MPSSE_IDLE;
         break;
 
       case MPSSE_TRANSMIT_BYTE:

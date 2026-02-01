@@ -37,6 +37,7 @@
 
 /* Configurable delay for clock generation */
 #define PIN_DELAY_CYCLES          3U  // Number of cycles for one iteration
+#define PIN_DELAY_NS              (PIN_DELAY_CYCLES * 7U)
 
 __ALWAYS_STATIC_INLINE
 void PIN_DELAY (uint32_t delay)
