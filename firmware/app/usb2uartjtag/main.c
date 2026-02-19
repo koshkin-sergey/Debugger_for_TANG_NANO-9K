@@ -133,7 +133,7 @@ uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *
     memcopy_to_fifo((void *)addr,ftdi_header,2);
     Ring_Buffer_Read_Callback(rb, USB_FS_MAX_PACKET_SIZE-2, memcopy_to_fifo, (void *)addr);
     USB_Set_EPx_Rdy(ep_idx);
-    led_set(0, 0);  //RX indication
+//    led_set(0, 0);  //RX indication
     last_send = mtimer_get_time_us();
     return (0);
   }
@@ -283,7 +283,6 @@ int main(void)
 //  uart1_rts_init();
   led_gpio_init();
   led_set(0, 1);	//led0 for RX/TX indication
-  led_set(1, 1);	//led1 for Power indication
   jtag_ringbuffer_init();
   jtag_gpio_init();
   EF_Ctrl_Read_Chip_ID(chipid);

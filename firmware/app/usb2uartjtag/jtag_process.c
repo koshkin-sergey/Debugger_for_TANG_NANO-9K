@@ -31,6 +31,8 @@
 #include "hal_gpio.h"
 #include "hal_common.h"
 #include "bl702_gpio.h"
+#include "bl702_pwm.h"
+#include "bl702_glb.h"
 #include "io_cfg.h"
 #include "usbd_ftdi.h"
 
@@ -168,43 +170,45 @@ void jtag_gpio_init(void)
 
 void usbd_cdc_jtag_out(uint8_t ep)
 {
-  uint32_t chunk;
+  (void) ep;
 
-  if (!jtag_received_flag) {
-    usbd_ep_read(ep, jtag_rx_buffer, JTAG_RX_BUFFER_SIZE, &chunk);
-    if (chunk == 0){
-      return;
-    }
-    led_set(0, 1);  //TX indication
-    jtag_rx_len = chunk;
-    jtag_rx_pos = 0;
-    jtag_received_flag = true;
-  }
+  jtag_received_flag = true;
 }
 
 extern uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep);
 void usbd_cdc_jtag_in(uint8_t ep)
 {
-  if (!jtag_received_flag) {
+  if (jtag_rx_len == 0U) {
     usb_dc_ftdi_send_from_ringbuffer(usb_fs, &jtag_tx_rb, ep);
   }
 }
 
 ATTR_CLOCK_SECTION void jtag_process(void)
 {
+  uint32_t chunk;
   uint8_t tx_data;
   uint8_t rx_data;
   uint32_t output_pin_mask;
   uint32_t bitbang;
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
 
-  if (!jtag_received_flag) {
+  if (jtag_received_flag == false) {
     return;
   }
 
-  while(jtag_rx_pos < jtag_rx_len) {
-    cpu_global_irq_disable();
+  usbd_ep_read(JTAG_OUT_EP, jtag_rx_buffer, JTAG_RX_BUFFER_SIZE, &chunk);
+  if (chunk == 0U) {
+    return;
+  }
 
+  jtag_rx_len = chunk;
+  jtag_rx_pos = 0;
+  jtag_received_flag = false;
+  usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);
+
+  led_set(0, 1);
+
+  while (jtag_rx_pos < jtag_rx_len) {
     switch (mpsse_status) {
       case MPSSE_IDLE:
         jtag_cmd = jtag_rx_buffer[jtag_rx_pos++];
@@ -268,7 +272,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_RCV_LENGTH_2:
         mpsse_length |= jtag_rx_buffer[jtag_rx_pos++] << 8;
 #if GOWIN_INT_FLASH_QUIRK
-        if ((mpsse_length >=2000) && (jtag_cmd & (1 << 5)) == 0) {
+        if ((mpsse_length >=2000) && (jtag_cmd & DSC_READ_TDO) == 0) {
           pwm_start();
           mpsse_status = MPSSE_RUN_TEST;
         }
@@ -289,6 +293,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BYTE:
+//        cpu_global_irq_disable();
+
         rx_data = jtag_rx_buffer[jtag_rx_pos++];
         tx_data = 0;
         bitbang = *gpio_out;
@@ -327,6 +333,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
         }
 
+//        cpu_global_irq_enable();
+
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
         }
@@ -340,6 +348,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BIT:
+//        cpu_global_irq_disable();
+
         rx_data = jtag_rx_buffer[jtag_rx_pos++];
         tx_data = 0;
         bitbang = *gpio_out;
@@ -393,6 +403,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
         };
 
+//        cpu_global_irq_enable();
+
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
         }
@@ -416,12 +428,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         mpsse_status = MPSSE_IDLE;
         break;
     }
-
-    if (jtag_rx_pos >= jtag_rx_len) {
-      jtag_received_flag = false;
-      usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);
-    }
-
-    cpu_global_irq_enable();
   }
+
+  jtag_rx_len = 0U;
+  led_set(0, 0);
 }
