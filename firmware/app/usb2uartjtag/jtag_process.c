@@ -74,11 +74,13 @@
 // 20.82 ns every one PIN_DELAY()
 #define DELAY_LOW()               PIN_DELAY(delay_val)
 #define DELAY_HIGH()              PIN_DELAY(delay_val)
-#define DELAY_RUN_TEST()          PIN_DELAY(60)
+#define DELAY_RUN_TEST()          PIN_DELAY(20)
+#define PIN_DELAY_CALC(mhz, div)  (((div) + 1U) * 1000 / ((mhz) * PIN_DELAY_NS))
+#define CLK_MHZ_DEFAULT           (12U)
+#define CLK_DIV_DEFAULT           (0U)
 
 extern void led_set(uint8_t idx, uint8_t status);
 
-static uint32_t delay_val;
 static uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 static Ring_Buffer_Type jtag_tx_rb;
 
@@ -87,7 +89,9 @@ static volatile uint32_t jtag_rx_len = 0;
 static volatile uint32_t jtag_rx_pos __attribute__((section(".tcm_data")));
 
 static uint16_t mpsse_length __attribute__((section(".tcm_data")));
-static uint16_t mpsse_value  __attribute__((section(".tcm_data")));
+static volatile uint32_t clk_mhz __attribute__((section(".tcm_data"))) = CLK_MHZ_DEFAULT;
+static volatile uint16_t clk_div __attribute__((section(".tcm_data"))) = CLK_DIV_DEFAULT;
+static volatile uint32_t delay_val __attribute__((section(".tcm_data"))) = PIN_DELAY_CALC(CLK_MHZ_DEFAULT, CLK_DIV_DEFAULT);
 static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static uint32_t jtag_cmd __attribute__((section(".tcm_data")));
 static volatile uint32_t jtag_received_flag __attribute__((section(".tcm_data"))) = false;
@@ -144,7 +148,7 @@ void pwm_init(void)
         .stopMode = PWM_STOP_GRACEFUL,
         .pol = PWM_POL_NORMAL,
         .clkDiv = 1,
-        .period = 29,
+        .period = 28,
         .threshold1 = 0,
         .threshold2 = 14,
         .intPulseCnt = 0,
@@ -208,6 +212,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
   led_set(0, 1);
 
+  cpu_global_irq_disable();
+
   while (jtag_rx_pos < jtag_rx_len) {
     switch (mpsse_status) {
       case MPSSE_IDLE:
@@ -218,38 +224,31 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         else {
           switch (jtag_cmd) {
             /* Instructions*/
-            case 0x80:
-            case 0x82:/* set data bit as output, we just nop it */
+            case 0x80:  //This will setup the direction of the first 8 lines and force a value on the bits that are set as output.
+            case 0x82:  //This will setup the direction of the high 8 lines and force a value on the bits that are set as output.
               jtag_rx_pos += 2U;
               break;
-            case 0x81:
-            case 0x83:/* dummy read back 8pins data, and send to usb */
+            case 0x81:  //This will read the current state of the first 8 pins and send back 1 byte.
+            case 0x83:  //This will read the current state of the high 8 pins and send back 1 byte.
               jtag_write(0U);
               break;
-            case 0x86: /* Clock Divisor, 0xValueL, 0xValueH */
+            case 0x84:  //Connect TDI to TDO for Loopback
+            case 0x85:  //Disconnect TDI to TDO for Loopback
+              __NOP();
+              break;
+            case 0x86:  //This will set the clock divisor.
               mpsse_status = MPSSE_RCV_VALUE_L;
               break;
-            case 0x8e:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bit
-              jtag_rx_pos += 1U;
-              break;
-            case 0x8f:	//Allows for a clock to be output without transferring data. Commonly used in the JTAG state machine. Clocks counted in terms of numbers of bytes
-            case 0x9c:	//Allows for a clock to be output without transferring data until a logic 1 input on GPIOL1 stops the clock or a set number of clock pulses are sent. Clocks counted in terms of numbers of bytes
-            case 0x9d:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock or a set number of clock pulses are sent. Clocks counted in terms of numbers of bytes
-              jtag_rx_pos += 2U;
-              break;
-            case 0x84:  //This will connect the TDI/DO output to the TDO/DI input for loopback testing.
-            case 0x85:  //This will disconnect the TDI output from the TDO input for loopback testing.
             case 0x87:  //Send immediate. This will make the chip flush its buffer back to the PC.
-            case 0x88:  //This will cause the MPSSE controller to wait until GPIOL1 (JTAG) or I/O1 (CPU) is high.
-            case 0x89:  //This will cause the controller to wait until GPIOL1 (JTAG) or I/O1 (CPU) is low.
-            case 0x8a:	//Disables the clk divide by 5 to allow for a 60MHz master clock
-            case 0x8b:	//Enables the clk divide by 5 to allow for backward compatibility with FT2232D
-            case 0x8c:	//Enables 3 phase data clocking. Used by I2C interfaces to allow data on both clock edges.
-            case 0x8d:	//Disables 3 phase data clocking.
-            case 0x94:	//Allows for a clock to be output without transferring data until a logic 1 input on GPIOL1 stops the clock
-            case 0x95:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock.
-            case 0x96:	//Allows for a clock to be output without transferring data until a logic 0 input on GPIOL1 stops the clock.
-            case 0x97:	//Disable adaptive clocking
+              __NOP();
+              break;
+            case 0x8a:  //Disables the clk divide by 5 to allow for a 60MHz master clock
+              clk_mhz = 60U;
+              delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
+              break;
+            case 0x8b:  //Enables the clk divide by 5 to allow for backward compatibility with FT2232D
+              clk_mhz = 12U;
+              delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
               break;
             default:
               jtag_write(0xFA);
@@ -272,7 +271,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_RCV_LENGTH_2:
         mpsse_length |= jtag_rx_buffer[jtag_rx_pos++] << 8;
 #if GOWIN_INT_FLASH_QUIRK
-        if ((mpsse_length >=2000) && (jtag_cmd & DSC_READ_TDO) == 0) {
+        if ((mpsse_length >=8000) && (jtag_cmd & DSC_READ_TDO) == 0) {
           pwm_start();
           mpsse_status = MPSSE_RUN_TEST;
         }
@@ -282,19 +281,17 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_RCV_VALUE_L:
-        mpsse_value = jtag_rx_buffer[jtag_rx_pos++];
+        clk_div = jtag_rx_buffer[jtag_rx_pos++];
         mpsse_status = MPSSE_RCV_VALUE_H;
         break;
 
       case MPSSE_RCV_VALUE_H:
-        mpsse_value |= jtag_rx_buffer[jtag_rx_pos++] << 8;
-        delay_val = (mpsse_value + 1U) * 1000 / (12 * PIN_DELAY_NS);
+        clk_div |= jtag_rx_buffer[jtag_rx_pos++] << 8;
+        delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
         mpsse_status = MPSSE_IDLE;
         break;
 
       case MPSSE_TRANSMIT_BYTE:
-//        cpu_global_irq_disable();
-
         rx_data = jtag_rx_buffer[jtag_rx_pos++];
         tx_data = 0;
         bitbang = *gpio_out;
@@ -333,8 +330,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
         }
 
-//        cpu_global_irq_enable();
-
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
         }
@@ -348,8 +343,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BIT:
-//        cpu_global_irq_disable();
-
         rx_data = jtag_rx_buffer[jtag_rx_pos++];
         tx_data = 0;
         bitbang = *gpio_out;
@@ -403,8 +396,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           *gpio_out = bitbang;
         };
 
-//        cpu_global_irq_enable();
-
         if ((jtag_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
         }
@@ -418,9 +409,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           mpsse_status = MPSSE_IDLE;
           pwm_stop();
         }
+
+        DELAY_RUN_TEST();
+
         jtag_rx_pos++;
         mpsse_length--;
-        DELAY_RUN_TEST();
         break;
 #endif
 
@@ -429,6 +422,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
     }
   }
+
+  cpu_global_irq_enable();
 
   jtag_rx_len = 0U;
   led_set(0, 0);

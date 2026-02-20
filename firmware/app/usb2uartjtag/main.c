@@ -274,6 +274,9 @@ int main(void)
 {
   uint8_t chipid[8];
   uint8_t chipid2[6];
+
+  /* disable debug for uart0 */
+  bflb_platform_print_set(1);
   GLB_Select_Internal_Flash();
   bflb_platform_init(0);
   uart_ringbuffer_init();
