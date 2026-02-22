@@ -319,8 +319,7 @@ int main(void)
 
   led_set(0, 0);
 
-  while (1)
-  {
+  for (;;) {
     uart_send_from_ringbuffer();
     jtag_process();
   }
