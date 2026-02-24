@@ -27,6 +27,7 @@
 #include "usbd_core.h"
 #include "usbd_ftdi.h"
 #include "uart_interface.h"
+#include "jtag_process.h"
 #include "bl702_ef_ctrl.h"
 #include "bl702_usb.h"
 #include "bl702_glb.h"
@@ -46,11 +47,6 @@ JTAG:
 */
 
 extern struct device* usb_dc_init(void);
-extern void jtag_process(void);
-extern void jtag_ringbuffer_init(void);
-extern void jtag_gpio_init(void);
-extern void usbd_cdc_jtag_out(uint8_t ep);
-extern void usbd_cdc_jtag_in(uint8_t ep);
 
 usbd_class_t cdc_class0;
 usbd_interface_t cdc_data_intf0;
@@ -61,22 +57,20 @@ struct device *usb_fs;
 
 
 /************************  led ctrl functions  ************************/
-static uint32_t led_pins[2] = {LED0_PIN, LED1_PIN};
-
-static void led_gpio_init(void)
+static
+void led_gpio_init(void)
 {
-  gpio_set_mode(led_pins[0], GPIO_OUTPUT_MODE);
-  gpio_set_mode(led_pins[1], GPIO_OUTPUT_MODE);
+  gpio_set_mode(LED0_PIN, GPIO_OUTPUT_MODE);
 }
 
-void led_set(uint8_t idx, uint8_t status)
+void led_set(uint8_t status)
 {
-  gpio_write(led_pins[idx], !status);
+  gpio_write(LED0_PIN, !status);
 }
 
-void led_toggle(uint8_t idx)
+void led_toggle(void)
 {
-  gpio_toggle(led_pins[idx]);
+  gpio_toggle(LED0_PIN);
 }
 
 /************************  API for usbd_ftdi  ************************/
@@ -102,7 +96,7 @@ static volatile uint32_t temp_tick1 = 0;	//tick for uart port
 uint64_t last_send = 0;
 
 // UART RX -> USB IN
-uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep)
+uint16_t usb_dc_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
   uint32_t timeout = 0x00FFFFFF;
@@ -170,7 +164,7 @@ uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *
 }
 
 // USB OUT -> UART TX
-int usb_dc_ftdi_receive_to_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep)
+int usb_dc_ftdi_receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
   uint8_t recv_len;
@@ -215,18 +209,31 @@ int usb_dc_ftdi_receive_to_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, 
   }
 }
 
-
 // USB -> UART out
+static
 void usbd_cdc_acm_bulk_out(uint8_t ep)
 {
-    usb_dc_ftdi_receive_to_ringbuffer(usb_fs, &usb_rx_rb, ep);
-}
-//UART -> USB in
-void usbd_cdc_acm_bulk_in(uint8_t ep)
-{
-    usb_dc_ftdi_send_from_ringbuffer(usb_fs, &uart1_rx_rb, ep);
+  usb_dc_ftdi_receive_to_ringbuffer(ep, &usb_rx_rb);
 }
 
+// UART -> USB in
+static
+void usbd_cdc_acm_bulk_in(uint8_t ep)
+{
+  usb_dc_ftdi_send_from_ringbuffer(ep, &uart1_rx_rb);
+}
+
+static
+void usbd_cdc_jtag_out(uint8_t ep)
+{
+  usb_dc_ftdi_receive_to_ringbuffer(ep, &jtag_rx_rb);
+}
+
+static
+void usbd_cdc_jtag_in(uint8_t ep)
+{
+  usb_dc_ftdi_send_from_ringbuffer(ep, &jtag_tx_rb);
+}
 
 /************************  endpoint definition  ************************/
 //For UART
@@ -285,7 +292,7 @@ int main(void)
 //  uart1_dtr_init();
 //  uart1_rts_init();
   led_gpio_init();
-  led_set(0, 1);	//led0 for RX/TX indication
+  led_set(1);
   jtag_ringbuffer_init();
   jtag_gpio_init();
   EF_Ctrl_Read_Chip_ID(chipid);
@@ -317,10 +324,10 @@ int main(void)
     __NOP();
   };
 
-  led_set(0, 0);
+  led_set(0);
 
   for (;;) {
-    uart_send_from_ringbuffer();
+//    uart_send_from_ringbuffer();
     jtag_process();
   }
 

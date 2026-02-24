@@ -33,8 +33,6 @@
 #define UART_RX_RINGBUFFER_SIZE (8 * 1024)
 #define UART_TX_DMA_SIZE (4095)
 
-extern void led_toggle(uint8_t idx);
-
 uint8_t usb_rx_mem[USB_OUT_RINGBUFFER_SIZE]
     __attribute__((section(".system_ram")));
 uint8_t uart_rx_mem[UART_RX_RINGBUFFER_SIZE]
@@ -165,7 +163,7 @@ void uart_send_from_ringbuffer(void) {
         device_control(dma_ch2, DEVICE_CTRL_DMA_CHANNEL_UPDATE,
                        (void *)((uint32_t)&uart_lli_list));
         dma_channel_start(dma_ch2);
-        led_toggle(0);
+        led_toggle();
       }
     }
   }

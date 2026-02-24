@@ -28,7 +28,6 @@
 #define UART_RXD_PIN              GPIO_PIN_27
 
 #define LED0_PIN                  GPIO_PIN_24
-#define LED1_PIN                  GPIO_PIN_25
 
 #define TMS_PIN                   GPIO_PIN_14
 #define TCK_PIN                   GPIO_PIN_23
@@ -49,6 +48,9 @@ void PIN_DELAY (uint32_t delay)
   : "+l" (delay) : : "cc"
   );
 }
+
+void led_set(uint8_t status);
+void led_toggle(void);
 
 #endif
 

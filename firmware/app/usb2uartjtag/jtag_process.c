@@ -26,7 +26,7 @@
 #include <string.h>
 #include <stdint.h>
 
-#include "ring_buffer.h"
+#include "jtag_process.h"
 #include "usb_dc.h"
 #include "hal_gpio.h"
 #include "hal_common.h"
@@ -34,7 +34,6 @@
 #include "bl702_pwm.h"
 #include "bl702_glb.h"
 #include "io_cfg.h"
-#include "usbd_ftdi.h"
 
 #define GOWIN_INT_FLASH_QUIRK     0
 #define PWM_CH                    3
@@ -69,8 +68,8 @@
 #define TDI_PIN_MASK              (1 << TDI_PIN)
 #define TDO_PIN_MASK              (1 << TDO_PIN)
 
-#define JTAG_TX_BUFFER_SIZE       (1 * 1024)
-#define JTAG_RX_BUFFER_SIZE       (64)
+#define JTAG_TX_BUFFER_SIZE       (1024)
+#define JTAG_RX_BUFFER_SIZE       (4 * 1024)
 
 // 6.94 ns every "nop"
 // 20.82 ns every one PIN_DELAY()
@@ -82,13 +81,11 @@
 #define CLK_MHZ_DEFAULT           (12U)
 #define CLK_DIV_DEFAULT           (0U)
 
-extern void led_set(uint8_t idx, uint8_t status);
-
 static uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
-static Ring_Buffer_Type jtag_tx_rb;
+Ring_Buffer_Type jtag_tx_rb;
 
 static uint8_t jtag_rx_buffer[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
-static uint32_t jtag_rx_len __attribute__((section(".tcm_data")));
+Ring_Buffer_Type jtag_rx_rb;
 
 static uint32_t clk_mhz __attribute__((section(".tcm_data"))) = CLK_MHZ_DEFAULT;
 static uint16_t clk_div __attribute__((section(".tcm_data"))) = CLK_DIV_DEFAULT;
@@ -96,21 +93,36 @@ static uint32_t delay_val __attribute__((section(".tcm_data"))) = PIN_DELAY_CALC
 static uint16_t mpsse_length __attribute__((section(".tcm_data")));
 static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static uint8_t mpsse_cmd __attribute__((section(".tcm_data")));
-static volatile uint32_t jtag_received_flag __attribute__((section(".tcm_data"))) = false;
 static uint32_t output_pin_mask __attribute__((section(".tcm_data")));
 
-extern struct device *usb_fs;
-
-static void jtag_write(uint8_t data)
+static
+void jtag_write(uint8_t data)
 {
   Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
+}
+
+static
+void ringbuffer_lock(void)
+{
+  cpu_global_irq_disable();
+}
+
+static
+void ringbuffer_unlock(void)
+{
+  cpu_global_irq_enable();
 }
 
 void jtag_ringbuffer_init(void)
 {
   memset(jtag_tx_buffer, 0, JTAG_TX_BUFFER_SIZE);
+  memset(jtag_rx_buffer, 0, JTAG_RX_BUFFER_SIZE);
+
   /* init ring_buffer */
-  Ring_Buffer_Init(&jtag_tx_rb, jtag_tx_buffer, JTAG_TX_BUFFER_SIZE, NULL, NULL);
+  Ring_Buffer_Init(&jtag_tx_rb, jtag_tx_buffer, JTAG_TX_BUFFER_SIZE,
+                   ringbuffer_lock, ringbuffer_unlock);
+  Ring_Buffer_Init(&jtag_rx_rb, jtag_rx_buffer, JTAG_RX_BUFFER_SIZE,
+                   ringbuffer_lock, ringbuffer_unlock);
 }
 
 #if GOWIN_INT_FLASH_QUIRK
@@ -175,21 +187,6 @@ void jtag_gpio_init(void)
 #endif
 }
 
-void usbd_cdc_jtag_out(uint8_t ep)
-{
-  (void) ep;
-
-  jtag_received_flag = true;
-}
-
-extern uint16_t usb_dc_ftdi_send_from_ringbuffer(struct device *dev, Ring_Buffer_Type *rb, uint8_t ep);
-void usbd_cdc_jtag_in(uint8_t ep)
-{
-  if (jtag_rx_len == 0U) {
-    usb_dc_ftdi_send_from_ringbuffer(usb_fs, &jtag_tx_rb, ep);
-  }
-}
-
 static
 ATTR_CLOCK_SECTION void transmit_bits(uint8_t rx_data, uint32_t cnt)
 {
@@ -247,26 +244,17 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 {
   register uint8_t rx_data;
   register uint32_t jtag_rx_pos;
+  register uint32_t jtag_rx_len;
+  static uint8_t rx_buf[512];
 
-  if (jtag_received_flag == false) {
-    return;
-  }
-
-  usbd_ep_read(JTAG_OUT_EP, jtag_rx_buffer, JTAG_RX_BUFFER_SIZE, &jtag_rx_len);
+  jtag_rx_len = Ring_Buffer_Read(&jtag_rx_rb, rx_buf, sizeof(rx_buf));
   if (jtag_rx_len == 0U) {
     return;
   }
 
   jtag_rx_pos = 0U;
-  jtag_received_flag = false;
-  usbd_ep_read(JTAG_OUT_EP, NULL, 0, NULL);
-
-  led_set(0, 1);
-
-  cpu_global_irq_disable();
-
   while (jtag_rx_pos < jtag_rx_len) {
-    rx_data = jtag_rx_buffer[jtag_rx_pos++];
+    rx_data = rx_buf[jtag_rx_pos++];
 
     switch (mpsse_status) {
       case MPSSE_IDLE:
@@ -354,7 +342,9 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BYTE:
+        cpu_global_irq_disable();
         transmit_bits(rx_data, 8U);
+        cpu_global_irq_enable();
 
         if (mpsse_length > 0U) {
           --mpsse_length;
@@ -396,9 +386,4 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
     }
   }
-
-  cpu_global_irq_enable();
-
-  jtag_rx_len = 0U;
-  led_set(0, 0);
 }
