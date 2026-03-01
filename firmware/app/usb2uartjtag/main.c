@@ -168,24 +168,23 @@ int usb_dc_ftdi_receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
   uint8_t recv_len;
-  uint32_t timeout = 0x00FFFFFF;
+//  uint32_t timeout = 0x00FFFFFF;
   static bool overflow_flag = false;
 
   /* Check if OUT ep */
-  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT) {
-    //USB_DC_LOG_ERR("Wrong endpoint direction\r\n");
-    return (-USB_DC_EP_DIR_ERR);
-  }
+//  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT) {
+//    return (-USB_DC_EP_DIR_ERR);
+//  }
 
   ep_idx = USB_EP_GET_IDX(ep);
 
-  while (!USB_Is_EPx_RDY_Free(ep_idx)) {
-    timeout--;
-    if (!timeout) {
-      //USB_DC_LOG_ERR("ep%d wait free timeout\r\n", ep);
-      return (-USB_DC_EP_TIMEOUT_ERR);
-    }
-  }
+//  while (!USB_Is_EPx_RDY_Free(ep_idx)) {
+//    timeout--;
+//    if (!timeout) {
+//      return (-USB_DC_EP_TIMEOUT_ERR);
+//    }
+//  }
+
   recv_len = USB_Get_EPx_RX_FIFO_CNT(ep_idx);
 
   /*if rx fifo count equal 0,it means last is send nack and ringbuffer is smaller than 64,
@@ -327,7 +326,7 @@ int main(void)
   led_set(0);
 
   for (;;) {
-//    uart_send_from_ringbuffer();
+    uart_send_from_ringbuffer();
     jtag_process();
   }
 

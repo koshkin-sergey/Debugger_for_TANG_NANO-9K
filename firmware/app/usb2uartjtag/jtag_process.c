@@ -260,16 +260,19 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_IDLE:
         mpsse_cmd = rx_data;
         if ((mpsse_cmd & DSC_INSTRACTION) == 0U) {
-          if ((mpsse_cmd & DSC_WRITE_TMS) != 0U) {
-            output_pin_mask = TMS_PIN_MASK;
+          if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) != 0U && (mpsse_cmd & DSC_NVE_CLK_ON_WR) != 0U) {
+            if ((mpsse_cmd & DSC_WRITE_TMS) != 0U) {
+              output_pin_mask = TMS_PIN_MASK;
+            }
+            else if ((mpsse_cmd & DSC_WRITE_TDI) != 0U) {
+              output_pin_mask = TDI_PIN_MASK;
+            }
+            else {
+              output_pin_mask = 0U;
+            }
+
+            mpsse_status = MPSSE_RCV_LENGTH_1;
           }
-          else if ((mpsse_cmd & DSC_WRITE_TDI) != 0U) {
-            output_pin_mask = TDI_PIN_MASK;
-          }
-          else {
-            output_pin_mask = 0U;
-          }
-          mpsse_status = MPSSE_RCV_LENGTH_1;
         }
         else {
           switch (mpsse_cmd) {
