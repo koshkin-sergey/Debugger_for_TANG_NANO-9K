@@ -73,11 +73,10 @@
 
 // 6.94 ns every "nop"
 // 20.82 ns every one PIN_DELAY()
-#define DELAY_LOW()
-//#define DELAY_LOW()               PIN_DELAY(delay_val)
-#define DELAY_HIGH()              PIN_DELAY(delay_val)
-#define DELAY_RUN_TEST()          PIN_DELAY(20)
-#define PIN_DELAY_CALC(mhz, div)  (((div) + 1U) * 1000 / ((mhz) * PIN_DELAY_NS))
+//#define DELAY_IMPULSE()
+#define DELAY_IMPULSE()           PIN_DELAY(delay_val)
+//#define DELAY_RUN_TEST()          PIN_DELAY(20)
+#define PIN_DELAY_CALC(mhz, div)  ((div) * (1000 / PIN_DELAY_NS) / (mhz))
 #define CLK_MHZ_DEFAULT           (12U)
 #define CLK_DIV_DEFAULT           (0U)
 
@@ -178,7 +177,7 @@ void jtag_gpio_init(void)
   gpio_set_mode(TMS_PIN, GPIO_OUTPUT_MODE);
   gpio_write(TDI_PIN, 0U);
   gpio_set_mode(TDI_PIN, GPIO_OUTPUT_MODE);
-  gpio_write(TCK_PIN, 0U);
+  gpio_write(TCK_PIN, 1U);
   gpio_set_mode(TCK_PIN, GPIO_OUTPUT_MODE);
   gpio_set_mode(TDO_PIN, GPIO_INPUT_MODE);
 
@@ -188,13 +187,18 @@ void jtag_gpio_init(void)
 }
 
 static
-ATTR_CLOCK_SECTION void transmit_bits(uint8_t rx_data, uint32_t cnt)
+ATTR_CLOCK_SECTION void transmit_bits(uint8_t cmd, uint8_t rx_data, uint32_t cnt)
 {
   register uint8_t tx_data;
   register uint32_t bitbang;
+  register uint32_t i;
+  register uint32_t bit;
+  register uint32_t isLSB;
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
 
   tx_data = 0U;
+  bit = 0U;
+  isLSB = (cmd & DSC_LSB_FIRST) != 0U;
   bitbang = *gpio_out;
 
   if (output_pin_mask == TMS_PIN_MASK) {
@@ -206,8 +210,8 @@ ATTR_CLOCK_SECTION void transmit_bits(uint8_t rx_data, uint32_t cnt)
     }
   }
 
-  for (uint32_t bit = 0U; bit < cnt; ++bit) {
-    uint32_t i = (mpsse_cmd & DSC_LSB_FIRST) != 0U ? bit : 7U - bit;
+  do {
+    i = isLSB ? bit : 7U - bit;
 
     if (rx_data & (1 << i)) {
       bitbang |= output_pin_mask;
@@ -219,23 +223,19 @@ ATTR_CLOCK_SECTION void transmit_bits(uint8_t rx_data, uint32_t cnt)
     //TCK_LOW;
     bitbang &= ~TCK_PIN_MASK;
     *gpio_out = bitbang;
-    DELAY_LOW();
-
-    if (TDO != 0U) {
-      tx_data |= 1 << i;
-    }
+    DELAY_IMPULSE();
 
     //TCK_HIGH;
     bitbang |= TCK_PIN_MASK;
     *gpio_out = bitbang;
-    DELAY_HIGH();
+    DELAY_IMPULSE();
 
-    //TCK_LOW;
-    bitbang &= ~TCK_PIN_MASK;
-    *gpio_out = bitbang;
-  }
+    if (TDO != 0U) {
+      tx_data |= 1 << i;
+    }
+  } while (bit++ < cnt);
 
-  if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
+  if ((cmd & DSC_READ_TDO) != 0U) {
     jtag_write(tx_data);
   }
 }
@@ -245,7 +245,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   register uint8_t rx_data;
   register uint32_t jtag_rx_pos;
   register uint32_t jtag_rx_len;
-  static uint8_t rx_buf[512];
+  static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 
   jtag_rx_len = Ring_Buffer_Read(&jtag_rx_rb, rx_buf, sizeof(rx_buf));
   if (jtag_rx_len == 0U) {
@@ -253,6 +253,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   }
 
   jtag_rx_pos = 0U;
+  cpu_global_irq_disable();
+
   while (jtag_rx_pos < jtag_rx_len) {
     rx_data = rx_buf[jtag_rx_pos++];
 
@@ -345,9 +347,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BYTE:
-        cpu_global_irq_disable();
-        transmit_bits(rx_data, 8U);
-        cpu_global_irq_enable();
+        transmit_bits(mpsse_cmd, rx_data, 7U);
 
         if (mpsse_length > 0U) {
           --mpsse_length;
@@ -358,7 +358,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BIT:
-        transmit_bits(rx_data, mpsse_length+1);
+        transmit_bits(mpsse_cmd, rx_data, mpsse_length);
         mpsse_status = MPSSE_IDLE;
         break;
 
@@ -389,4 +389,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
     }
   }
+
+  cpu_global_irq_enable();
 }
