@@ -30,13 +30,11 @@
 #include "usb_dc.h"
 #include "hal_gpio.h"
 #include "hal_common.h"
+#include "hal_mtimer.h"
 #include "bl702_gpio.h"
 #include "bl702_pwm.h"
 #include "bl702_glb.h"
 #include "io_cfg.h"
-
-#define GOWIN_INT_FLASH_QUIRK     0
-#define PWM_CH                    3
 
 #define GPIO_IN_ADDR              ((volatile uint32_t *)0x40000180)
 #define GPIO_OUT_ADDR             ((volatile uint32_t *)0x40000188)
@@ -49,9 +47,8 @@
 #define MPSSE_RCV_VALUE_H         4
 #define MPSSE_TRANSMIT_BYTE       5
 #define MPSSE_TRANSMIT_BIT        6
-#define MPSSE_RUN_TEST            7
-#define MPSSE_SET_VALUE           8
-#define MPSSE_SET_DIRECTION       9
+#define MPSSE_SET_VALUE           7
+#define MPSSE_SET_DIRECTION       8
 
 /* Data Shifting Command Bit Definitions */
 #define DSC_NVE_CLK_ON_WR         (1UL << 0)
@@ -69,16 +66,34 @@
 #define TDO_PIN_MASK              (1 << TDO_PIN)
 
 #define JTAG_TX_BUFFER_SIZE       (1024)
-#define JTAG_RX_BUFFER_SIZE       (4 * 1024)
+#define JTAG_RX_BUFFER_SIZE       (64)
 
 // 6.94 ns every "nop"
 // 20.82 ns every one PIN_DELAY()
 //#define DELAY_IMPULSE()
 #define DELAY_IMPULSE()           PIN_DELAY(delay_val)
-//#define DELAY_RUN_TEST()          PIN_DELAY(20)
-#define PIN_DELAY_CALC(mhz, div)  ((div) * (1000 / PIN_DELAY_NS) / (mhz))
+#define PIN_DELAY_CALC(mhz, div)  (((div) + 1) * (1000 / PIN_DELAY_NS) / (mhz))
 #define CLK_MHZ_DEFAULT           (12U)
 #define CLK_DIV_DEFAULT           (0U)
+
+typedef enum {
+  TEST_LOGIC_RESET,
+  RUN_TEST_IDLE,
+  SELECT_DR_SCAN,
+  SELECT_IR_SCAN,
+  CAPTURE_DR,
+  CAPTURE_IR,
+  SHIFT_DR,
+  SHIFT_IR,
+  EXIT1_DR,
+  EXIT1_IR,
+  PAUSE_DR,
+  PAUSE_IR,
+  EXIT2_DR,
+  EXIT2_IR,
+  UPDATE_DR,
+  UPDATE_IR,
+} jtag_fsm_state_t;
 
 static uint8_t jtag_tx_buffer[JTAG_TX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 Ring_Buffer_Type jtag_tx_rb;
@@ -93,6 +108,8 @@ static uint16_t mpsse_length __attribute__((section(".tcm_data")));
 static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static uint8_t mpsse_cmd __attribute__((section(".tcm_data")));
 static uint32_t output_pin_mask __attribute__((section(".tcm_data")));
+static jtag_fsm_state_t jtag_fsm_state __attribute__((section(".tcm_data")));
+static uint8_t jtag_inst __attribute__((section(".tcm_data")));
 
 static
 void jtag_write(uint8_t data)
@@ -124,53 +141,6 @@ void jtag_ringbuffer_init(void)
                    ringbuffer_lock, ringbuffer_unlock);
 }
 
-#if GOWIN_INT_FLASH_QUIRK
-static void pwm_start(void)
-{
-    GLB_GPIO_Cfg_Type gpio_cfg;
-
-    gpio_cfg.drive = 0;
-    gpio_cfg.smtCtrl = 1;
-    gpio_cfg.gpioMode = GPIO_MODE_AF;
-    gpio_cfg.pullType = GPIO_PULL_DOWN;
-    gpio_cfg.gpioFun = GPIO_FUN_PWM;
-    gpio_cfg.gpioPin = TCK_PIN;
-    GLB_GPIO_Init(&gpio_cfg);
-    PWM_Channel_Enable(PWM_CH);
-}
-
-static void pwm_stop(void)
-{
-    PWM_Channel_Disable(PWM_CH);
-
-    GLB_GPIO_Cfg_Type gpio_cfg;
-    gpio_cfg.drive = 0;
-    gpio_cfg.smtCtrl = 1;
-    gpio_cfg.gpioMode = GPIO_MODE_OUTPUT;
-    gpio_cfg.pullType = GPIO_PULL_NONE;
-    gpio_cfg.gpioFun = GPIO_FUN_GPIO;
-    gpio_cfg.gpioPin = TCK_PIN;
-    GLB_GPIO_Init(&gpio_cfg);
-}
-
-void pwm_init(void)
-{
-    static PWM_CH_CFG_Type pwmCfg =
-    {
-        .ch = PWM_CH,
-        .clk = PWM_CLK_BCLK,
-        .stopMode = PWM_STOP_GRACEFUL,
-        .pol = PWM_POL_NORMAL,
-        .clkDiv = 1,
-        .period = 28,
-        .threshold1 = 0,
-        .threshold2 = 14,
-        .intPulseCnt = 0,
-    };
-    PWM_Channel_Init(&pwmCfg);
-}
-#endif
-
 void jtag_gpio_init(void)
 {
   gpio_write(TMS_PIN, 0U);
@@ -180,25 +150,140 @@ void jtag_gpio_init(void)
   gpio_write(TCK_PIN, 1U);
   gpio_set_mode(TCK_PIN, GPIO_OUTPUT_MODE);
   gpio_set_mode(TDO_PIN, GPIO_INPUT_MODE);
-
-#if GOWIN_INT_FLASH_QUIRK 
-  pwm_init();
-#endif
 }
 
-static
-ATTR_CLOCK_SECTION void transmit_bits(uint8_t cmd, uint8_t rx_data, uint32_t cnt)
+static ATTR_CLOCK_SECTION
+jtag_fsm_state_t jtag_fsm(uint8_t cmd, uint8_t rx_data, uint32_t cnt)
+{
+  jtag_fsm_state_t old_state = jtag_fsm_state;
+  register uint32_t i = 0U;
+  register bool is_TMS_Set;
+
+  if (output_pin_mask == TMS_PIN_MASK) {
+    do {
+      is_TMS_Set = (rx_data & (1 << i)) != 0U;
+      switch (jtag_fsm_state) {
+        case TEST_LOGIC_RESET:
+          if (!is_TMS_Set) {
+            jtag_fsm_state = RUN_TEST_IDLE;
+          }
+          break;
+        case RUN_TEST_IDLE:
+          if (is_TMS_Set) {
+            jtag_fsm_state = SELECT_DR_SCAN;
+          }
+          break;
+        case SELECT_DR_SCAN:
+          if (is_TMS_Set) {
+            jtag_fsm_state = SELECT_IR_SCAN;
+          }
+          else {
+            jtag_fsm_state = CAPTURE_DR;
+          }
+          break;
+        case SELECT_IR_SCAN:
+          if (is_TMS_Set) {
+            jtag_fsm_state = TEST_LOGIC_RESET;
+          }
+          else {
+            jtag_fsm_state = CAPTURE_IR;
+          }
+          break;
+        case CAPTURE_DR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = EXIT1_DR;
+          }
+          else {
+            jtag_fsm_state = SHIFT_DR;
+          }
+          break;
+        case CAPTURE_IR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = EXIT1_IR;
+          }
+          else {
+            jtag_fsm_state = SHIFT_IR;
+          }
+          break;
+        case SHIFT_DR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = EXIT1_DR;
+          }
+          break;
+        case SHIFT_IR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = EXIT1_IR;
+          }
+          break;
+        case EXIT1_DR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = UPDATE_DR;
+          }
+          else {
+            jtag_fsm_state = PAUSE_DR;
+          }
+          break;
+        case EXIT1_IR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = UPDATE_IR;
+          }
+          else {
+            jtag_fsm_state = PAUSE_IR;
+          }
+          break;
+        case PAUSE_DR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = EXIT2_DR;
+          }
+          break;
+        case PAUSE_IR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = EXIT2_IR;
+          }
+          break;
+        case EXIT2_DR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = UPDATE_DR;
+          }
+          else {
+            jtag_fsm_state = SHIFT_DR;
+          }
+          break;
+        case EXIT2_IR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = UPDATE_IR;
+          }
+          else {
+            jtag_fsm_state = SHIFT_IR;
+          }
+          break;
+        case UPDATE_DR:
+        case UPDATE_IR:
+          if (is_TMS_Set) {
+            jtag_fsm_state = SELECT_DR_SCAN;
+          }
+          else {
+            jtag_fsm_state = RUN_TEST_IDLE;
+          }
+          break;
+      }
+    } while (i++ < cnt);
+  }
+
+  return (old_state);
+}
+
+static ATTR_CLOCK_SECTION
+uint8_t transmit_bits(bool isLSB, uint8_t rx_data, uint32_t cnt)
 {
   register uint8_t tx_data;
   register uint32_t bitbang;
   register uint32_t i;
   register uint32_t bit;
-  register uint32_t isLSB;
   volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
 
   tx_data = 0U;
   bit = 0U;
-  isLSB = (cmd & DSC_LSB_FIRST) != 0U;
   bitbang = *gpio_out;
 
   if (output_pin_mask == TMS_PIN_MASK) {
@@ -235,28 +320,28 @@ ATTR_CLOCK_SECTION void transmit_bits(uint8_t cmd, uint8_t rx_data, uint32_t cnt
     }
   } while (bit++ < cnt);
 
-  if ((cmd & DSC_READ_TDO) != 0U) {
-    jtag_write(tx_data);
-  }
+  return (tx_data);
 }
 
 ATTR_CLOCK_SECTION void jtag_process(void)
 {
   register uint8_t rx_data;
-  register uint32_t jtag_rx_pos;
-  register uint32_t jtag_rx_len;
-  static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
+  register uint8_t tx_data;
+  register uint32_t cnt;
+  static uint32_t rx_pos __attribute__((section(".tcm_data")));
+  static uint32_t rx_len __attribute__((section(".tcm_data")));
+  static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE * 2] __attribute__((section(".tcm_data")));
 
-  jtag_rx_len = Ring_Buffer_Read(&jtag_rx_rb, rx_buf, sizeof(rx_buf));
-  if (jtag_rx_len == 0U) {
+  cnt = Ring_Buffer_Read(&jtag_rx_rb, &rx_buf[rx_len], sizeof(rx_buf) - rx_len);
+  if (cnt == 0U) {
     return;
   }
 
-  jtag_rx_pos = 0U;
+  rx_len += cnt;
   cpu_global_irq_disable();
 
-  while (jtag_rx_pos < jtag_rx_len) {
-    rx_data = rx_buf[jtag_rx_pos++];
+  while (rx_pos < rx_len) {
+    rx_data = rx_buf[rx_pos];
 
     switch (mpsse_status) {
       case MPSSE_IDLE:
@@ -325,13 +410,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
       case MPSSE_RCV_LENGTH_2:
         mpsse_length |= rx_data << 8;
-#if GOWIN_INT_FLASH_QUIRK
-        if ((mpsse_length >=8000) && (mpsse_cmd & DSC_READ_TDO) == 0) {
-          pwm_start();
-          mpsse_status = MPSSE_RUN_TEST;
-        }
-        else
-#endif
         mpsse_status = MPSSE_TRANSMIT_BYTE;
         break;
 
@@ -347,7 +425,13 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BYTE:
-        transmit_bits(mpsse_cmd, rx_data, 7U);
+        tx_data = transmit_bits((mpsse_cmd & DSC_LSB_FIRST) != 0U, rx_data, 7U);
+        if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
+//          if (jtag_inst == 0x41 && tx_data == 0x80) {
+//            tx_data = 0x90;
+//          }
+          jtag_write(tx_data);
+        }
 
         if (mpsse_length > 0U) {
           --mpsse_length;
@@ -358,7 +442,25 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BIT:
-        transmit_bits(mpsse_cmd, rx_data, mpsse_length);
+        jtag_fsm(mpsse_cmd, rx_data, mpsse_length);
+        if (jtag_fsm_state == SHIFT_IR) {
+          jtag_inst = rx_data;
+        }
+
+        if (jtag_inst == 0x71 && jtag_fsm_state == RUN_TEST_IDLE) {
+          if (rx_len - rx_pos < 32U) {
+            memcpy(&rx_buf[0], &rx_buf[rx_pos], rx_len -= rx_pos);
+            rx_pos = 0U;
+            cpu_global_irq_enable();
+            return;
+          }
+        }
+
+        tx_data = transmit_bits((mpsse_cmd & DSC_LSB_FIRST) != 0U, rx_data, mpsse_length);
+        if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
+          jtag_write(tx_data);
+        }
+
         mpsse_status = MPSSE_IDLE;
         break;
 
@@ -370,25 +472,15 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         mpsse_status = MPSSE_IDLE;
         break;
 
-#if GOWIN_INT_FLASH_QUIRK
-      case MPSSE_RUN_TEST:
-        if (mpsse_length == 0) {
-          mpsse_status = MPSSE_IDLE;
-          pwm_stop();
-        }
-
-        DELAY_RUN_TEST();
-
-        jtag_rx_pos++;
-        mpsse_length--;
-        break;
-#endif
-
       default:
         mpsse_status = MPSSE_IDLE;
         break;
     }
+
+    ++rx_pos;
   }
 
   cpu_global_irq_enable();
+  rx_pos = 0U;
+  rx_len = 0U;
 }
