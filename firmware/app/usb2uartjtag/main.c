@@ -167,45 +167,45 @@ uint16_t usb_dc_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 int usb_dc_ftdi_receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
-  uint8_t recv_len;
-//  uint32_t timeout = 0x00FFFFFF;
-  static bool overflow_flag = false;
+  uint32_t recv_len;
+  uint32_t timeout = 0x00FFFFFF;
 
   /* Check if OUT ep */
-//  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT) {
-//    return (-USB_DC_EP_DIR_ERR);
-//  }
+  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT) {
+    return (-USB_DC_EP_DIR_ERR);
+  }
 
   ep_idx = USB_EP_GET_IDX(ep);
 
-//  while (!USB_Is_EPx_RDY_Free(ep_idx)) {
-//    timeout--;
-//    if (!timeout) {
-//      return (-USB_DC_EP_TIMEOUT_ERR);
-//    }
-//  }
+  while (!USB_Is_EPx_RDY_Free(ep_idx)) {
+    timeout--;
+    if (!timeout) {
+      return (-USB_DC_EP_TIMEOUT_ERR);
+    }
+  }
 
   recv_len = USB_Get_EPx_RX_FIFO_CNT(ep_idx);
 
   /*if rx fifo count equal 0,it means last is send nack and ringbuffer is smaller than 64,
    * so,if ringbuffer is larger than 64,set ack to recv next data.
    */
-  if (overflow_flag && (Ring_Buffer_Get_Empty_Length(rb)>64) && (!recv_len)) {
-    overflow_flag = false;
-    USB_Set_EPx_Rdy(ep_idx);
-    return (0);
+  if (recv_len == 0U) {
+    if (Ring_Buffer_Get_Empty_Length(rb) >= USB_FS_MAX_PACKET_SIZE) {
+      USB_Set_EPx_Rdy(ep_idx);
+    }
   }
   else {
     uint32_t addr = USB_BASE + 0x11C + (ep_idx - 1) * 0x10;
     Ring_Buffer_Write_Callback(rb, recv_len, fifocopy_to_mem, (void *)addr);
 
-    if(Ring_Buffer_Get_Empty_Length(rb) < 64) {
-      overflow_flag = true;
+    if (Ring_Buffer_Get_Empty_Length(rb) < USB_FS_MAX_PACKET_SIZE) {
       return (-USB_DC_RB_SIZE_SMALL_ERR);
     }
+
     USB_Set_EPx_Rdy(ep_idx);
-    return (0);
   }
+
+  return (0);
 }
 
 // USB -> UART out
@@ -287,17 +287,12 @@ int main(void)
   bflb_platform_init(0);
   uart_ringbuffer_init();
   uart1_init();
-//  uart1_set_dtr_rts(UART_DTR_PIN,UART_RTS_PIN);
-//  uart1_dtr_init();
-//  uart1_rts_init();
   led_gpio_init();
   led_set(1);
   jtag_ringbuffer_init();
   jtag_gpio_init();
   EF_Ctrl_Read_Chip_ID(chipid);
   hexarr2string(&chipid[2],3,chipid2);
-//  bflb_platform_dump(chipid,8);
-//  bflb_platform_dump(chipid2,6);
   cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24     ] = chipid2[0];
   cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 2 ] = chipid2[1];
   cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 4 ] = chipid2[2];

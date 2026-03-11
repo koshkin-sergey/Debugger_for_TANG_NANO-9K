@@ -51,22 +51,22 @@
 #define MPSSE_SET_DIRECTION       8
 
 /* Data Shifting Command Bit Definitions */
-#define DSC_NVE_CLK_ON_WR         (1UL << 0)
-#define DSC_BIT_MODE              (1UL << 1)
-#define DSC_NVE_CLK_ON_RD         (1UL << 2)
-#define DSC_LSB_FIRST             (1UL << 3)
-#define DSC_WRITE_TDI             (1UL << 4)
-#define DSC_READ_TDO              (1UL << 5)
-#define DSC_WRITE_TMS             (1UL << 6)
-#define DSC_INSTRACTION           (1UL << 7)
+#define DSC_NVE_CLK_ON_WR         (uint8_t)(1UL << 0)
+#define DSC_BIT_MODE              (uint8_t)(1UL << 1)
+#define DSC_NVE_CLK_ON_RD         (uint8_t)(1UL << 2)
+#define DSC_LSB_FIRST             (uint8_t)(1UL << 3)
+#define DSC_WRITE_TDI             (uint8_t)(1UL << 4)
+#define DSC_READ_TDO              (uint8_t)(1UL << 5)
+#define DSC_WRITE_TMS             (uint8_t)(1UL << 6)
+#define DSC_INSTRACTION           (uint8_t)(1UL << 7)
 
-#define TMS_PIN_MASK              (1 << TMS_PIN)
-#define TCK_PIN_MASK              (1 << TCK_PIN)
-#define TDI_PIN_MASK              (1 << TDI_PIN)
-#define TDO_PIN_MASK              (1 << TDO_PIN)
+#define TMS_PIN_MASK              (1UL << TMS_PIN)
+#define TCK_PIN_MASK              (1UL << TCK_PIN)
+#define TDI_PIN_MASK              (1UL << TDI_PIN)
+#define TDO_PIN_MASK              (1UL << TDO_PIN)
 
-#define JTAG_TX_BUFFER_SIZE       (1024)
-#define JTAG_RX_BUFFER_SIZE       (64)
+#define JTAG_TX_BUFFER_SIZE       (256)
+#define JTAG_RX_BUFFER_SIZE       (256)
 
 // 6.94 ns every "nop"
 // 20.82 ns every one PIN_DELAY()
@@ -104,29 +104,12 @@ Ring_Buffer_Type jtag_rx_rb;
 static uint32_t clk_mhz __attribute__((section(".tcm_data"))) = CLK_MHZ_DEFAULT;
 static uint16_t clk_div __attribute__((section(".tcm_data"))) = CLK_DIV_DEFAULT;
 static uint32_t delay_val __attribute__((section(".tcm_data"))) = PIN_DELAY_CALC(CLK_MHZ_DEFAULT, CLK_DIV_DEFAULT);
-static uint16_t mpsse_length __attribute__((section(".tcm_data")));
-static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
-static uint8_t mpsse_cmd __attribute__((section(".tcm_data")));
-static uint32_t output_pin_mask __attribute__((section(".tcm_data")));
 static jtag_fsm_state_t jtag_fsm_state __attribute__((section(".tcm_data")));
-static uint8_t jtag_inst __attribute__((section(".tcm_data")));
 
-static
+__ALWAYS_STATIC_INLINE
 void jtag_write(uint8_t data)
 {
   Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
-}
-
-static
-void ringbuffer_lock(void)
-{
-  cpu_global_irq_disable();
-}
-
-static
-void ringbuffer_unlock(void)
-{
-  cpu_global_irq_enable();
 }
 
 void jtag_ringbuffer_init(void)
@@ -136,9 +119,9 @@ void jtag_ringbuffer_init(void)
 
   /* init ring_buffer */
   Ring_Buffer_Init(&jtag_tx_rb, jtag_tx_buffer, JTAG_TX_BUFFER_SIZE,
-                   ringbuffer_lock, ringbuffer_unlock);
+      cpu_global_irq_disable, cpu_global_irq_enable);
   Ring_Buffer_Init(&jtag_rx_rb, jtag_rx_buffer, JTAG_RX_BUFFER_SIZE,
-                   ringbuffer_lock, ringbuffer_unlock);
+      cpu_global_irq_disable, cpu_global_irq_enable);
 }
 
 void jtag_gpio_init(void)
@@ -152,129 +135,118 @@ void jtag_gpio_init(void)
   gpio_set_mode(TDO_PIN, GPIO_INPUT_MODE);
 }
 
-static ATTR_CLOCK_SECTION
-jtag_fsm_state_t jtag_fsm(uint8_t cmd, uint8_t rx_data, uint32_t cnt)
+__STATIC_INLINE ATTR_CLOCK_SECTION
+void jtag_fsm(bool is_TMS_Set)
 {
-  jtag_fsm_state_t old_state = jtag_fsm_state;
-  register uint32_t i = 0U;
-  register bool is_TMS_Set;
-
-  if (output_pin_mask == TMS_PIN_MASK) {
-    do {
-      is_TMS_Set = (rx_data & (1 << i)) != 0U;
-      switch (jtag_fsm_state) {
-        case TEST_LOGIC_RESET:
-          if (!is_TMS_Set) {
-            jtag_fsm_state = RUN_TEST_IDLE;
-          }
-          break;
-        case RUN_TEST_IDLE:
-          if (is_TMS_Set) {
-            jtag_fsm_state = SELECT_DR_SCAN;
-          }
-          break;
-        case SELECT_DR_SCAN:
-          if (is_TMS_Set) {
-            jtag_fsm_state = SELECT_IR_SCAN;
-          }
-          else {
-            jtag_fsm_state = CAPTURE_DR;
-          }
-          break;
-        case SELECT_IR_SCAN:
-          if (is_TMS_Set) {
-            jtag_fsm_state = TEST_LOGIC_RESET;
-          }
-          else {
-            jtag_fsm_state = CAPTURE_IR;
-          }
-          break;
-        case CAPTURE_DR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = EXIT1_DR;
-          }
-          else {
-            jtag_fsm_state = SHIFT_DR;
-          }
-          break;
-        case CAPTURE_IR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = EXIT1_IR;
-          }
-          else {
-            jtag_fsm_state = SHIFT_IR;
-          }
-          break;
-        case SHIFT_DR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = EXIT1_DR;
-          }
-          break;
-        case SHIFT_IR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = EXIT1_IR;
-          }
-          break;
-        case EXIT1_DR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = UPDATE_DR;
-          }
-          else {
-            jtag_fsm_state = PAUSE_DR;
-          }
-          break;
-        case EXIT1_IR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = UPDATE_IR;
-          }
-          else {
-            jtag_fsm_state = PAUSE_IR;
-          }
-          break;
-        case PAUSE_DR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = EXIT2_DR;
-          }
-          break;
-        case PAUSE_IR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = EXIT2_IR;
-          }
-          break;
-        case EXIT2_DR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = UPDATE_DR;
-          }
-          else {
-            jtag_fsm_state = SHIFT_DR;
-          }
-          break;
-        case EXIT2_IR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = UPDATE_IR;
-          }
-          else {
-            jtag_fsm_state = SHIFT_IR;
-          }
-          break;
-        case UPDATE_DR:
-        case UPDATE_IR:
-          if (is_TMS_Set) {
-            jtag_fsm_state = SELECT_DR_SCAN;
-          }
-          else {
-            jtag_fsm_state = RUN_TEST_IDLE;
-          }
-          break;
+  switch (jtag_fsm_state) {
+    case TEST_LOGIC_RESET:
+      if (!is_TMS_Set) {
+        jtag_fsm_state = RUN_TEST_IDLE;
       }
-    } while (i++ < cnt);
+      break;
+    case RUN_TEST_IDLE:
+      if (is_TMS_Set) {
+        jtag_fsm_state = SELECT_DR_SCAN;
+      }
+      break;
+    case SELECT_DR_SCAN:
+      if (is_TMS_Set) {
+        jtag_fsm_state = SELECT_IR_SCAN;
+      }
+      else {
+        jtag_fsm_state = CAPTURE_DR;
+      }
+      break;
+    case SELECT_IR_SCAN:
+      if (is_TMS_Set) {
+        jtag_fsm_state = TEST_LOGIC_RESET;
+      }
+      else {
+        jtag_fsm_state = CAPTURE_IR;
+      }
+      break;
+    case CAPTURE_DR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = EXIT1_DR;
+      }
+      else {
+        jtag_fsm_state = SHIFT_DR;
+      }
+      break;
+    case CAPTURE_IR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = EXIT1_IR;
+      }
+      else {
+        jtag_fsm_state = SHIFT_IR;
+      }
+      break;
+    case SHIFT_DR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = EXIT1_DR;
+      }
+      break;
+    case SHIFT_IR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = EXIT1_IR;
+      }
+      break;
+    case EXIT1_DR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = UPDATE_DR;
+      }
+      else {
+        jtag_fsm_state = PAUSE_DR;
+      }
+      break;
+    case EXIT1_IR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = UPDATE_IR;
+      }
+      else {
+        jtag_fsm_state = PAUSE_IR;
+      }
+      break;
+    case PAUSE_DR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = EXIT2_DR;
+      }
+      break;
+    case PAUSE_IR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = EXIT2_IR;
+      }
+      break;
+    case EXIT2_DR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = UPDATE_DR;
+      }
+      else {
+        jtag_fsm_state = SHIFT_DR;
+      }
+      break;
+    case EXIT2_IR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = UPDATE_IR;
+      }
+      else {
+        jtag_fsm_state = SHIFT_IR;
+      }
+      break;
+    case UPDATE_DR:
+    case UPDATE_IR:
+      if (is_TMS_Set) {
+        jtag_fsm_state = SELECT_DR_SCAN;
+      }
+      else {
+        jtag_fsm_state = RUN_TEST_IDLE;
+      }
+      break;
   }
-
-  return (old_state);
 }
 
-static ATTR_CLOCK_SECTION
-uint8_t transmit_bits(bool isLSB, uint8_t rx_data, uint32_t cnt)
+__STATIC_INLINE ATTR_CLOCK_SECTION
+uint8_t transmit_tdi_bit(uint8_t rx_data, uint32_t cnt, bool isLSB)
 {
   register uint8_t tx_data;
   register uint32_t bitbang;
@@ -286,38 +258,72 @@ uint8_t transmit_bits(bool isLSB, uint8_t rx_data, uint32_t cnt)
   bit = 0U;
   bitbang = *gpio_out;
 
-  if (output_pin_mask == TMS_PIN_MASK) {
-    if ((rx_data & (1 << 7)) != 0U) {
-      bitbang |= TDI_PIN_MASK;
-    }
-    else {
-      bitbang &= ~TDI_PIN_MASK;
-    }
-  }
-
   do {
-    i = isLSB ? bit : 7U - bit;
+    i = isLSB ? bit : 7UL - bit;
 
-    if (rx_data & (1 << i)) {
-      bitbang |= output_pin_mask;
-    }
-    else {
-      bitbang &= ~output_pin_mask;
+    bitbang &= ~(TCK_PIN_MASK | TDI_PIN_MASK);
+
+    if ((rx_data & (uint8_t)(1U << i)) != 0U) {
+      bitbang |= TDI_PIN_MASK;
     }
 
     //TCK_LOW;
-    bitbang &= ~TCK_PIN_MASK;
     *gpio_out = bitbang;
     DELAY_IMPULSE();
+
+    if (TDO != 0U) {
+      tx_data |= (uint8_t)(1U << i);
+    }
 
     //TCK_HIGH;
     bitbang |= TCK_PIN_MASK;
     *gpio_out = bitbang;
     DELAY_IMPULSE();
+  } while (bit++ < cnt);
+
+  return (tx_data);
+}
+
+__STATIC_INLINE ATTR_CLOCK_SECTION
+uint8_t transmit_tms_bit(uint8_t rx_data, uint32_t cnt)
+{
+  register uint8_t tx_data;
+  register uint32_t bitbang;
+  register uint32_t bit;
+  volatile uint32_t *gpio_out = GPIO_OUT_ADDR;
+
+  tx_data = 0U;
+  bit = 0U;
+  bitbang = *gpio_out;
+
+  if ((rx_data & (uint8_t)(1U << 7)) != 0U) {
+    bitbang |= TDI_PIN_MASK;
+  }
+  else {
+    bitbang &= ~TDI_PIN_MASK;
+  }
+
+  do {
+    jtag_fsm((rx_data & (uint8_t)(1U << bit)) != 0U);
+
+    bitbang &= ~(TCK_PIN_MASK | TMS_PIN_MASK);
+
+    if ((rx_data & (uint8_t)(1U << bit)) != 0U) {
+      bitbang |= TMS_PIN_MASK;
+    }
+
+    //TCK_LOW;
+    *gpio_out = bitbang;
+    DELAY_IMPULSE();
 
     if (TDO != 0U) {
-      tx_data |= 1 << i;
+      tx_data |= (uint8_t)(1U << bit);
     }
+
+    //TCK_HIGH;
+    bitbang |= TCK_PIN_MASK;
+    *gpio_out = bitbang;
+    DELAY_IMPULSE();
   } while (bit++ < cnt);
 
   return (tx_data);
@@ -328,14 +334,20 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   register uint8_t rx_data;
   register uint8_t tx_data;
   register uint32_t cnt;
+  static uint8_t jtag_inst __attribute__((section(".tcm_data")));
+  static uint16_t mpsse_length __attribute__((section(".tcm_data")));
+  static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
+  static uint8_t mpsse_cmd __attribute__((section(".tcm_data")));
   static uint32_t rx_pos __attribute__((section(".tcm_data")));
   static uint32_t rx_len __attribute__((section(".tcm_data")));
-  static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE * 2] __attribute__((section(".tcm_data")));
+  static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
 
   cnt = Ring_Buffer_Read(&jtag_rx_rb, &rx_buf[rx_len], sizeof(rx_buf) - rx_len);
   if (cnt == 0U) {
     return;
   }
+
+  led_set(1);
 
   rx_len += cnt;
   cpu_global_irq_disable();
@@ -348,16 +360,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         mpsse_cmd = rx_data;
         if ((mpsse_cmd & DSC_INSTRACTION) == 0U) {
           if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) != 0U && (mpsse_cmd & DSC_NVE_CLK_ON_WR) != 0U) {
-            if ((mpsse_cmd & DSC_WRITE_TMS) != 0U) {
-              output_pin_mask = TMS_PIN_MASK;
-            }
-            else if ((mpsse_cmd & DSC_WRITE_TDI) != 0U) {
-              output_pin_mask = TDI_PIN_MASK;
-            }
-            else {
-              output_pin_mask = 0U;
-            }
-
             mpsse_status = MPSSE_RCV_LENGTH_1;
           }
         }
@@ -425,11 +427,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BYTE:
-        tx_data = transmit_bits((mpsse_cmd & DSC_LSB_FIRST) != 0U, rx_data, 7U);
+        tx_data = transmit_tdi_bit(rx_data, 7U, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
-          if (jtag_inst == 0x41 && tx_data == 0x80) {
-            tx_data = 0x90;
-          }
+//          if (jtag_inst == 0x41 && tx_data == 0x80) {
+//            tx_data = 0x90;
+//          }
           jtag_write(tx_data);
         }
 
@@ -455,8 +457,13 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           }
         }
 
-        tx_data = transmit_bits((mpsse_cmd & DSC_LSB_FIRST) != 0U, rx_data, mpsse_length);
-        jtag_fsm(mpsse_cmd, rx_data, mpsse_length);
+        if ((mpsse_cmd & DSC_WRITE_TDI) != 0U) {
+          tx_data = transmit_tdi_bit(rx_data, mpsse_length, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
+        }
+        else {
+          tx_data = transmit_tms_bit(rx_data, mpsse_length);
+        }
+
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
         }
@@ -483,4 +490,5 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   cpu_global_irq_enable();
   rx_pos = 0U;
   rx_len = 0U;
+  led_set(0);
 }
