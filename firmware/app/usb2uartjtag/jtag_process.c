@@ -427,9 +427,9 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BYTE:
         tx_data = transmit_bits((mpsse_cmd & DSC_LSB_FIRST) != 0U, rx_data, 7U);
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
-//          if (jtag_inst == 0x41 && tx_data == 0x80) {
-//            tx_data = 0x90;
-//          }
+          if (jtag_inst == 0x41 && tx_data == 0x80) {
+            tx_data = 0x90;
+          }
           jtag_write(tx_data);
         }
 
@@ -442,8 +442,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_TRANSMIT_BIT:
-        jtag_fsm(mpsse_cmd, rx_data, mpsse_length);
-        if (jtag_fsm_state == SHIFT_IR) {
+        if (jtag_fsm_state == SHIFT_IR && (mpsse_cmd & DSC_WRITE_TDI) != 0U) {
           jtag_inst = rx_data;
         }
 
@@ -457,6 +456,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
 
         tx_data = transmit_bits((mpsse_cmd & DSC_LSB_FIRST) != 0U, rx_data, mpsse_length);
+        jtag_fsm(mpsse_cmd, rx_data, mpsse_length);
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
           jtag_write(tx_data);
         }
