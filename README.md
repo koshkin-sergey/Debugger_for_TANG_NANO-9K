@@ -13,7 +13,7 @@ The Tang Nano 9K, powered by [Gowin's](https://www.gowinsemi.com/en/) GW1NR-9 FP
 
 ![](res/9K.png)
 
-Schematic: [Tang_nano_9K_3674_schematics.pdf](res/Tang_nano_9K_3674_schematics.pdf)
+Schematic: [Tang_nano_9K_3674_schematics.pdf](hardware/Tang_nano_9K_3674_schematics.pdf)
 
 
 # Firmware
