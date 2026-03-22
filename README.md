@@ -40,7 +40,11 @@ The firmware is './out/app/usb2dualuart/usb2dualuart_bl702.bin'.
 
 ## flash firmware
 
-Hold "boot" button down, then plug usb cable to PC USB port, and you will see "CDC Virtual ComPort" in device manager , remember the com number.
+Connect the two test points marked with a red oval in the photo below.
+
+![](res/BL702.png)
+
+Then plug usb cable to PC USB port, and you will see "CDC Virtual ComPort" in device manager, remember the com number.
 
 The flash tool is in tools/bflb_flash_tool directory, and input the command (replace port number and firmware name):
 
@@ -85,9 +89,6 @@ tools\bflb_flash_tool> .\bflb_mcu_tool.exe --chipname=bl702 --port=COM9 --xtal=3
 [22:07:31.390] - [All Success]
 ~~~
 
-Another GUI flash tool is BouffaloLabDevCube:
-- [Bouffalo Lab Dev Cube For Windows](https://dev.bouffalolab.com/media/upload/download/BouffaloLabDevCube-1.5.2-win32.zip)
-- [Bouffalo Lab Dev Cube For Ubuntu](https://dev.bouffalolab.com/media/upload/download/BouffaloLabDevCube-1.5.2-linux-x86.tar.gz)
 
 ## usb2uartjtag (default)
 
@@ -101,19 +102,17 @@ we remap baudrate in 10000~12000 to (baud-10000)*10000
 for example, 11200bps -> 12Mbps
 ~~~
 
-LED0 for RX indication, LED1 for TX indication.
+LED for process indication.
 
 JTAG function is verified for :
 
-- RV32 Xuantie E906/E907
-- RV64 Xuantie C906
-- Gowin FPGA GW1N-1, GW1NS-4C. (need enable GOWIN_INT_FLASH_QUIRK)
+- Gowin FPGA GW1NR-9.
 
 
 # Project Structure
 
 ```
-RV-Debugger-BL702
+Debugger_for_TANG_NANO-9K
 ├── firmware
 │   ├── app
 │   │   ├── usb2dualuart
@@ -123,7 +122,7 @@ RV-Debugger-BL702
 ├── README.md
 └── res
 ```
-BL SDK usage tutorial refer to http://bouffalolab.gitee.io/bl_mcu_sdk/
+BL SDK usage tutorial refer to https://dev.bouffalolab.com/media/doc/sdk/bl_mcu_sdk_en/index.html
 
 ### Code Explanation
 ~~~
@@ -131,8 +130,8 @@ firmware/app/usb2uartjtag:
 ├── main.c
 ├── uart_interface.c
 ├── jtag_process.c
-└── io_cfg.h         //main io cfg, another file is pinmux_config.h in bsp/board/bl702_debugger
-components/usb_stack/class/vendor:
+├── io_cfg.h         //main io cfg, another file is pinmux_config.h in bsp/board/
+│                      bl702_debugger
 └── usbd_ftdi.c      //all FTDI vendor request process, like baudrate set, dtr/rts set, Latency_Timer
 ~~~
 
