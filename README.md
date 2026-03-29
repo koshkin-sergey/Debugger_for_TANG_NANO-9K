@@ -135,3 +135,40 @@ firmware/app/usb2uartjtag:
 └── usbd_ftdi.c      //all FTDI vendor request process, like baudrate set, dtr/rts set, Latency_Timer
 ~~~
 
+# Problems when writing flash memory with a Gowin programmer
+## Process of Programming Internal Flash
+
+The internal Flash uses 256 Bytes as an X-page. Each X-page is
+divided into 64 Y-pages, and each Y-page contains 4 Bytes.
+
+### Process of Programming an X-page
+The X-page programming process is shown below.
+1. Send the "0x15" instruction of ConfigEnable;
+2. Send the "0x71" instruction of EF-Program;
+3. Enter into Shift-DR and send address data;
+4. Write an X-page data. One X-page has 256 bytes in all. Program 4 Bytes and program 64
+times for one X-page.
+5. After one X-page is written in, GW1N-1(S) needs to perform Run-Test
+for 2400μs; GW1N(Z)-2/4/6/9 needs to perform Run-Test for 6μs. No
+extra clock is required for the other series of devices.
+6. This X-page programming ends.
+
+### Process of Programming an Y-page
+Y-page programming is the smallest unit in programming process. 4
+Bytes are written each time in the LSB way. Different series of devices all need
+to perform Run-Test to wait for writing all Bytes, and the JTAG clock needs to
+meet minimum frequency requirements.
+
+| Device        | TCK Frequency Range | Process Code |
+| ------------- | ------------------- | ------------ |
+| GW1N-1        | 1.4MHz ~ 5MHz       | H            |
+| GW1N-1S       | 1.4MHz ~ 5MHz       | H            |
+| GW1N(RF)-4B   | 1MHz ~ 5MHz         | T            |
+| GW1N(SER)-4C  | 1MHz ~ 5MHz         | T            |
+| GW1N(R)-9(C)  | 1MHz ~ 5MHz         | T            |
+| GW1NZ-1       | 1MHz ~ 5MHz         | T            |
+| GW1NS(E)-2(C) | 1MHz ~ 5MHz         | S            |
+
+After one Y-page is written in each time, GW1N(Z)-2/4/6/9 needs to
+perform Run-Test for 13-15 μs; GW1N(S)-2(C) needs to perform Run-Test
+for 30-35 μs. No extra clock is required for the other series of devices.
