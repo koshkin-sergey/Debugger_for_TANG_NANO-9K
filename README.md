@@ -135,7 +135,7 @@ firmware/app/usb2uartjtag:
 └── usbd_ftdi.c      //all FTDI vendor request process, like baudrate set, dtr/rts set, Latency_Timer
 ~~~
 
-# Problems when writing flash memory with a Gowin programmer
+# Problems of programming internal flash memory with a Gowin programmer
 ## Process of Programming Internal Flash
 
 The internal Flash uses 256 Bytes as an X-page. Each X-page is
@@ -187,3 +187,12 @@ This situation occurs when working with the Gowin programmer.
 This problem does not occur when working with openFPGALoader. The data is always aligned by transactions. Therefore, the delay always occurs at the EXIT1-DR stage.
 
 ![](res/openFPGAloader.png)
+
+# Solving the problem of programming internal flash memory using the Gowin programmer.
+
+An algorithm has been developed in which, when writing data to the flash, when the JTAG state machine is in the RUN-TEST/IDLE state, the amount of data in the input buffer is monitored. If there is a lack of data, the next packet is waited for. This eliminates pauses between bytes when the JTAG state machine is in the SHIFT-DR state. Pauses only occur in the RUN-TEST/IDLE state.
+
+This algorithm works equally well with both the Gowin programmer and the openFPGAloader.
+The figure below shows how the new algorithm works.
+
+![](res/new_alg.png)

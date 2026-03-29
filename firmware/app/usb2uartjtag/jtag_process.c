@@ -36,6 +36,8 @@
 #include "bl702_glb.h"
 #include "io_cfg.h"
 
+#define GOWIN_VLD                 0
+
 #define GPIO_IN_ADDR              ((volatile uint32_t *)0x40000180)
 #define GPIO_OUT_ADDR             ((volatile uint32_t *)0x40000188)
 #define TDO                       (*GPIO_IN_ADDR & (TDO_PIN_MASK))
@@ -334,6 +336,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   register uint8_t rx_data;
   register uint8_t tx_data;
   register uint32_t cnt;
+  static uint8_t stat_cnt __attribute__((section(".tcm_data")));
   static uint8_t jtag_inst __attribute__((section(".tcm_data")));
   static uint16_t mpsse_length __attribute__((section(".tcm_data")));
   static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
@@ -429,9 +432,14 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BYTE:
         tx_data = transmit_tdi_bit(rx_data, 7U, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
-//          if (jtag_inst == 0x41 && tx_data == 0x80) {
-//            tx_data = 0x90;
-//          }
+#if defined(GOWIN_VLD) && GOWIN_VLD == 1
+          if (jtag_inst == 0x41) {
+            ++stat_cnt;
+            if (stat_cnt == 2U) {
+              tx_data |= 0x10;
+            }
+          }
+#endif
           jtag_write(tx_data);
         }
 
@@ -447,7 +455,11 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         if (jtag_fsm_state == SHIFT_IR && (mpsse_cmd & DSC_WRITE_TDI) != 0U) {
           jtag_inst = rx_data;
         }
-
+#if defined(GOWIN_VLD) && GOWIN_VLD == 1
+        if (jtag_inst == 0x41) {
+          stat_cnt = 0U;
+        }
+#endif
         if (jtag_inst == 0x71 && jtag_fsm_state == RUN_TEST_IDLE) {
           if (rx_len - rx_pos < 32U) {
             memcpy(&rx_buf[0], &rx_buf[rx_pos], rx_len -= rx_pos);
