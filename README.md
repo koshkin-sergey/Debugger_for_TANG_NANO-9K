@@ -157,7 +157,7 @@ extra clock is required for the other series of devices.
 Y-page programming is the smallest unit in programming process. 4
 Bytes are written each time in the LSB way, as shown in Figure below.
 
-![Y-page programming](res/Y-page programming.png)
+![](res/Y-page_programming.png)
 
 Different series of devices all need to perform Run-Test to wait for writing all Bytes, and the JTAG clock needs to meet minimum frequency requirements.
 
@@ -180,7 +180,7 @@ When programming a 4-byte Y-page, there should be no pauses between individual b
 Pauses between bytes may occur because the USB interface transfers data in blocks of a maximum size of 64 bytes, and the transmitted data is not aligned to a 64-byte boundary.  
 The figure below shows a situation where, when programming a 4-byte Y-page, the JTAG state machine is in the SHIFT-DR state, and the input buffer runs out of data. It takes some time to load the input buffer via USB, which causes a delay.
 
-![](res/gowin programmer old.png)
+![](res/gowin_programmer_old.png)
 
 This situation occurs when working with the Gowin programmer.
 
