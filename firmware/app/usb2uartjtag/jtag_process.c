@@ -336,7 +336,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   register uint8_t rx_data;
   register uint8_t tx_data;
   register uint32_t cnt;
-  static uint8_t stat_cnt __attribute__((section(".tcm_data")));
   static uint8_t jtag_inst __attribute__((section(".tcm_data")));
   static uint16_t mpsse_length __attribute__((section(".tcm_data")));
   static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
@@ -344,6 +343,9 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   static uint32_t rx_pos __attribute__((section(".tcm_data")));
   static uint32_t rx_len __attribute__((section(".tcm_data")));
   static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
+#if defined(GOWIN_VLD) && GOWIN_VLD == 1
+  static uint8_t stat_cnt __attribute__((section(".tcm_data")));
+#endif
 
   cnt = Ring_Buffer_Read(&jtag_rx_rb, &rx_buf[rx_len], sizeof(rx_buf) - rx_len);
   if (cnt == 0U) {
@@ -454,18 +456,17 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_TRANSMIT_BIT:
         if (jtag_fsm_state == SHIFT_IR && (mpsse_cmd & DSC_WRITE_TDI) != 0U) {
           jtag_inst = rx_data;
-        }
 #if defined(GOWIN_VLD) && GOWIN_VLD == 1
-        if (jtag_inst == 0x41) {
-          stat_cnt = 0U;
-        }
+          if (jtag_inst == 0x41) {
+            stat_cnt = 0U;
+          }
 #endif
-        if (jtag_inst == 0x71 && jtag_fsm_state == RUN_TEST_IDLE) {
-          if (rx_len - rx_pos < 32U) {
-            memcpy(&rx_buf[0], &rx_buf[rx_pos], rx_len -= rx_pos);
-            rx_pos = 0U;
-            cpu_global_irq_enable();
-            return;
+        }
+
+        if (jtag_inst == 0x71) {
+          if ((jtag_fsm_state == EXIT1_DR) && ((rx_len - rx_pos) < 32U)) {
+            memcpy(&rx_buf[0], &rx_buf[rx_pos], rx_len - rx_pos);
+            goto exit;
           }
         }
 
@@ -499,8 +500,10 @@ ATTR_CLOCK_SECTION void jtag_process(void)
     ++rx_pos;
   }
 
-  cpu_global_irq_enable();
-  rx_pos = 0U;
-  rx_len = 0U;
   led_set(0);
+
+exit:
+  rx_len -= rx_pos;
+  rx_pos = 0U;
+  cpu_global_irq_enable();
 }
