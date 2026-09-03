@@ -364,7 +364,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_IDLE:
         mpsse_cmd = rx_data;
         if ((mpsse_cmd & DSC_INSTRACTION) == 0U) {
-          if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) != 0U && (mpsse_cmd & DSC_NVE_CLK_ON_WR) != 0U) {
+          if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) != 0U) {
             mpsse_status = MPSSE_RCV_LENGTH_1;
           }
         }
@@ -411,12 +411,13 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           mpsse_status = MPSSE_RCV_LENGTH_2;
         }
         else {
+          mpsse_length &= 0x07U;
           mpsse_status = MPSSE_TRANSMIT_BIT;
         }
         break;
 
       case MPSSE_RCV_LENGTH_2:
-        mpsse_length |= rx_data << 8;
+        mpsse_length |= (uint16_t)rx_data << 8;
         mpsse_status = MPSSE_TRANSMIT_BYTE;
         break;
 
@@ -426,12 +427,16 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         break;
 
       case MPSSE_RCV_VALUE_H:
-        clk_div |= rx_data << 8;
+        clk_div |= (uint16_t)rx_data << 8;
         delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
         mpsse_status = MPSSE_IDLE;
         break;
 
       case MPSSE_TRANSMIT_BYTE:
+//        if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) == DSC_READ_TDO) {
+//
+//        }
+
         tx_data = transmit_tdi_bit(rx_data, 7U, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
 #if defined(GOWIN_VLD) && GOWIN_VLD == 1
@@ -478,6 +483,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
 
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
+          if ((mpsse_cmd & DSC_LSB_FIRST) != 0U) {
+            tx_data <<= 7U - mpsse_length;
+          }
+          else {
+            tx_data >>= 7U - mpsse_length;
+          }
           jtag_write(tx_data);
         }
 

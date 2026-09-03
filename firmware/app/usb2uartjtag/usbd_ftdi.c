@@ -89,9 +89,9 @@ static void ftdi_set_baudrate(uint32_t  itdf_divisor, uint32_t *actual_baudrate)
 	{
 		baudrate = FTDI_USB_CLK / divisor;
 	}
-	if(baudrate>100000 && baudrate < 12000)
+	if(baudrate > 10000 && baudrate < 12000)
 	{
-		*actual_baudrate = (baudrate - 100000)*100000;
+		*actual_baudrate = (baudrate - 10000) * 10000;
 	}
 	else
 		*actual_baudrate = baudrate;
