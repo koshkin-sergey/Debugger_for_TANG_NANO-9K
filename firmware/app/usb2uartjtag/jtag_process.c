@@ -47,8 +47,8 @@
 #define MPSSE_RCV_LENGTH_2        2
 #define MPSSE_RCV_VALUE_L         3
 #define MPSSE_RCV_VALUE_H         4
-#define MPSSE_TRANSMIT_BYTE       5
-#define MPSSE_TRANSMIT_BIT        6
+#define MPSSE_TRANSFER_BYTE       5
+#define MPSSE_TRANSFER_BIT        6
 #define MPSSE_SET_VALUE           7
 #define MPSSE_SET_DIRECTION       8
 
@@ -412,13 +412,35 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         else {
           mpsse_length &= 0x07U;
-          mpsse_status = MPSSE_TRANSMIT_BIT;
+          if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) == DSC_READ_TDO) {
+            tx_data = transmit_tdi_bit(0U, mpsse_length, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
+            if ((mpsse_cmd & DSC_LSB_FIRST) != 0U) {
+              tx_data <<= 7U - mpsse_length;
+            }
+            else {
+              tx_data >>= 7U - mpsse_length;
+            }
+            jtag_write(tx_data);
+            mpsse_status = MPSSE_IDLE;
+          }
+          else {
+            mpsse_status = MPSSE_TRANSFER_BIT;
+          }
         }
         break;
 
       case MPSSE_RCV_LENGTH_2:
         mpsse_length |= (uint16_t)rx_data << 8;
-        mpsse_status = MPSSE_TRANSMIT_BYTE;
+        if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) == DSC_READ_TDO) {
+          do {
+            tx_data = transmit_tdi_bit(0U, 7U, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
+            jtag_write(tx_data);
+          } while (mpsse_length-- > 0U);
+          mpsse_status = MPSSE_IDLE;
+        }
+        else {
+          mpsse_status = MPSSE_TRANSFER_BYTE;
+        }
         break;
 
       case MPSSE_RCV_VALUE_L:
@@ -432,11 +454,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         mpsse_status = MPSSE_IDLE;
         break;
 
-      case MPSSE_TRANSMIT_BYTE:
-//        if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) == DSC_READ_TDO) {
-//
-//        }
-
+      case MPSSE_TRANSFER_BYTE:
         tx_data = transmit_tdi_bit(rx_data, 7U, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
         if ((mpsse_cmd & DSC_READ_TDO) != 0U) {
 #if defined(GOWIN_VLD) && GOWIN_VLD == 1
@@ -458,7 +476,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
         }
         break;
 
-      case MPSSE_TRANSMIT_BIT:
+      case MPSSE_TRANSFER_BIT:
         if (jtag_fsm_state == SHIFT_IR && (mpsse_cmd & DSC_WRITE_TDI) != 0U) {
           jtag_inst = rx_data;
 #if defined(GOWIN_VLD) && GOWIN_VLD == 1
