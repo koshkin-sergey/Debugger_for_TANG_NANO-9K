@@ -26,6 +26,7 @@
 #include "hal_mtimer.h"
 #include "usbd_core.h"
 #include "usbd_ftdi.h"
+#include "usb_descriptor.h"
 #include "uart_interface.h"
 #include "jtag_process.h"
 #include "bl702_ef_ctrl.h"
@@ -52,7 +53,6 @@ usbd_class_t cdc_class0;
 usbd_interface_t cdc_data_intf0;
 usbd_class_t cdc_class1;
 usbd_interface_t cdc_data_intf1;
-extern uint8_t cdc_descriptor[];
 struct device *usb_fs;
 
 
@@ -261,25 +261,9 @@ usbd_endpoint_t cdc_in_ep0 =
     .ep_cb = usbd_cdc_jtag_in
 };
 
-
-//for dbg chip id
-static void hexarr2string(uint8_t *hexarray,int length,uint8_t *string)
-{
-	static const unsigned char num2string_table[] = "0123456789ABCDEF";
-    int i = 0;
-	while(i < length)
-	{
-	    *(string++) = num2string_table[((hexarray[i] >> 4) & 0x0f)];
-		*(string++) = num2string_table[(hexarray[i] & 0x0f)];
-		i++;
-	}
-	return;
-}
-
 int main(void)
 {
   uint8_t chipid[8];
-  uint8_t chipid2[6];
 
   /* disable debug for uart0 */
   bflb_platform_print_set(1);
@@ -292,14 +276,7 @@ int main(void)
   jtag_ringbuffer_init();
   jtag_gpio_init();
   EF_Ctrl_Read_Chip_ID(chipid);
-  hexarr2string(&chipid[2],3,chipid2);
-  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24     ] = chipid2[0];
-  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 2 ] = chipid2[1];
-  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 4 ] = chipid2[2];
-  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 6 ] = chipid2[3];
-  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 8 ] = chipid2[4];
-  cdc_descriptor[0x12 + 0x37 + 0x04 + 0x0E + 0x1c + 0x24 + 10] = chipid2[5];
-  usbd_desc_register(cdc_descriptor);
+  usb_descriptor_register(chipid);
 
   usbd_ftdi_add_interface(&cdc_class0,&cdc_data_intf0);
   usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_out_ep0);
