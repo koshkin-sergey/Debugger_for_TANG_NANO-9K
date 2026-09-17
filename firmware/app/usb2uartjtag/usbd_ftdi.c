@@ -324,7 +324,6 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
   static bool zlp_flag = false;
-  static uint32_t send_total_len = 0;
   uint32_t timeout = 0x00FFFFFF;
 
   ep_idx = USB_EP_GET_IDX(ep);
@@ -343,12 +342,11 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 
   if (zlp_flag == true) {
     zlp_flag = false;
-    send_total_len = 0;
     USB_Set_EPx_Rdy(ep_idx);
     return (-USB_DC_ZLP_ERR);
   }
 
-  if (USB_Get_EPx_TX_FIFO_CNT(ep_idx) != USB_FS_MAX_PACKET_SIZE) {
+  if (!USB_Get_EPx_TX_FIFO_Status(ep_idx, USB_FIFO_EMPTY)) {
     return (-USB_DC_RB_SIZE_SMALL_ERR);
   }
 
@@ -356,14 +354,15 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 
   if ((Ring_Buffer_Get_Length(rb) == USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
       (sof_tick - last_send >= Latency_Timer)) {
-    memcopy_to_fifo((void *)addr, (uint8_t *)&ftdi_modem_status[0], sizeof(ftdi_modem_status));
-    send_total_len += sizeof(ftdi_modem_status);
-    send_total_len += Ring_Buffer_Read_Callback(rb,
-                                                USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status),
-                                                memcopy_to_fifo,
-                                                (void *)addr);
+    memcopy_to_fifo((void *)addr,
+                    (uint8_t *)&ftdi_modem_status[0],
+                    sizeof(ftdi_modem_status));
+    Ring_Buffer_Read_Callback(rb,
+                              USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status),
+                              memcopy_to_fifo,
+                              (void *)addr);
 
-    if (Ring_Buffer_Get_Length(rb) == 0U && (send_total_len % USB_FS_MAX_PACKET_SIZE) == 0U) {
+    if (Ring_Buffer_Get_Length(rb) == 0U && USB_Get_EPx_TX_FIFO_Status(ep_idx, USB_FIFO_FULL)) {
       zlp_flag = true;
     }
 
