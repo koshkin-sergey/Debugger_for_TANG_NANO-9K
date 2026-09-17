@@ -23,7 +23,6 @@
  */
 
 #include "hal_usb.h"
-#include "hal_mtimer.h"
 #include "usbd_core.h"
 #include "usbd_ftdi.h"
 #include "usb_descriptor.h"
@@ -36,16 +35,16 @@
 #include "io_cfg.h"
 
 /*
-UART:
-	RXD	-> ringbuffer -> usbd_cdc_acm_bulk_in -> CDC_IN_EP
-UART <---------------------------------------------------> USB
-	TXD <- ringbuffer <- usbd_cdc_acm_bulk_out<- CDC_OUT_EP
-	
-JTAG:
-	jtag_rx_buffer[jtag_rx_pos] -> jtag_cmd -> mpsse status machine
-	MPSSE_TRANSMIT_BYTE/BIT MSB/LSB MPSSE_TMS_OUT
-	bitbang simulate clk rate about 5MHz
-*/
+ UART:
+ RXD	-> ringbuffer -> usbd_cdc_acm_bulk_in -> CDC_IN_EP
+ UART <---------------------------------------------------> USB
+ TXD <- ringbuffer <- usbd_cdc_acm_bulk_out<- CDC_OUT_EP
+
+ JTAG:
+ jtag_rx_buffer[jtag_rx_pos] -> jtag_cmd -> mpsse status machine
+ MPSSE_TRANSMIT_BYTE/BIT MSB/LSB MPSSE_TMS_OUT
+ bitbang simulate clk rate about 5MHz
+ */
 
 extern struct device* usb_dc_init(void);
 
@@ -54,7 +53,6 @@ usbd_interface_t cdc_data_intf0;
 usbd_class_t cdc_class1;
 usbd_interface_t cdc_data_intf1;
 struct device *usb_fs;
-
 
 /************************  led ctrl functions  ************************/
 static
@@ -74,191 +72,59 @@ void led_toggle(void)
 }
 
 /************************  API for usbd_ftdi  ************************/
-void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits, uint8_t parity, uint8_t stopbits)
+void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
+    uint8_t parity, uint8_t stopbits)
 {
-    uart1_config(baudrate, databits, parity, stopbits);
-}
-
-void usbd_ftdi_set_dtr(bool dtr)
-{
-//    dtr_pin_set(!dtr);
-}
-
-void usbd_ftdi_set_rts(bool rts)
-{
-//    rts_pin_set(!rts);
-}
-
-
-/************************  USB UART logic for latency timer  ************************/
-static volatile uint32_t temp_tick2 = 0;	//tick for uart port
-static volatile uint32_t temp_tick1 = 0;	//tick for uart port
-uint64_t last_send = 0;
-
-// UART RX -> USB IN
-uint16_t usb_dc_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
-{
-  uint8_t ep_idx;
-  uint32_t timeout = 0x00FFFFFF;
-
-  ep_idx = USB_EP_GET_IDX(ep);
-  /* Check if IN ep */
-  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_IN)
-  {
-    return (-USB_DC_EP_DIR_ERR);
-  }
-
-  while (!USB_Is_EPx_RDY_Free(ep_idx))
-  {
-    timeout--;
-    if (!timeout)
-    {
-      MSG("ep%d wait free timeout\r\n", ep);
-      return (-USB_DC_EP_TIMEOUT_ERR);
-    }
-  }
-
-  uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
-
-  if ((USB_Get_EPx_TX_FIFO_CNT(ep_idx) == USB_FS_MAX_PACKET_SIZE) && Ring_Buffer_Get_Length(rb))
-  {
-    uint8_t ftdi_header[2] = {0x01,0x60};
-
-    memcopy_to_fifo((void *)addr,ftdi_header,2);
-    Ring_Buffer_Read_Callback(rb, USB_FS_MAX_PACKET_SIZE-2, memcopy_to_fifo, (void *)addr);
-    USB_Set_EPx_Rdy(ep_idx);
-//    led_set(0, 0);  //RX indication
-    last_send = mtimer_get_time_us();
-    return (0);
-  }
-  else
-  {
-    /*uint64_t Latency_Timer = (ep_idx - 1)==0?usbd_ftdi_get_latency_timer1():usbd_ftdi_get_latency_timer2();	//超时才发
-		if(mtimer_get_time_us()-last_send>Latency_Timer*1000) {
-			uint8_t ftdi_header[2] = {0x01,0x60};       
-			memcopy_to_fifo((void *)addr,ftdi_header,2);
-			USB_Set_EPx_Rdy(ep_idx);
-			last_send = mtimer_get_time_us();
-			//MSG("Port%d refresh\r\n", ep_idx);
-			return -USB_DC_RB_SIZE_SMALL_ERR;
-		}*/
-
-    if (ep_idx == CDC_IN_EP) {
-      if ((uint32_t)(usbd_ftdi_get_sof_tick()-temp_tick2) >= usbd_ftdi_get_latency_timer2()) {
-        uint8_t ftdi_header[2] = {0x01,0x60};
-        temp_tick2 = usbd_ftdi_get_sof_tick();
-        memcopy_to_fifo((void *)addr,ftdi_header,2);
-        USB_Set_EPx_Rdy(ep_idx);
-      }
-    }
-    else {
-      if(mtimer_get_time_us()-last_send>1000) {
-        uint8_t ftdi_header[2] = {0x01,0x60};
-        temp_tick1 = usbd_ftdi_get_sof_tick();
-        memcopy_to_fifo((void *)addr,ftdi_header,2);
-        USB_Set_EPx_Rdy(ep_idx);
-      }
-    }
-    return (-USB_DC_RB_SIZE_SMALL_ERR);
-  }
-}
-
-// USB OUT -> UART TX
-int usb_dc_ftdi_receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
-{
-  uint8_t ep_idx;
-  uint32_t recv_len;
-  uint32_t timeout = 0x00FFFFFF;
-
-  /* Check if OUT ep */
-  if (USB_EP_GET_DIR(ep) != USB_EP_DIR_OUT) {
-    return (-USB_DC_EP_DIR_ERR);
-  }
-
-  ep_idx = USB_EP_GET_IDX(ep);
-
-  while (!USB_Is_EPx_RDY_Free(ep_idx)) {
-    timeout--;
-    if (!timeout) {
-      return (-USB_DC_EP_TIMEOUT_ERR);
-    }
-  }
-
-  recv_len = USB_Get_EPx_RX_FIFO_CNT(ep_idx);
-
-  /*if rx fifo count equal 0,it means last is send nack and ringbuffer is smaller than 64,
-   * so,if ringbuffer is larger than 64,set ack to recv next data.
-   */
-  if (recv_len == 0U) {
-    if (Ring_Buffer_Get_Empty_Length(rb) >= USB_FS_MAX_PACKET_SIZE) {
-      USB_Set_EPx_Rdy(ep_idx);
-    }
-  }
-  else {
-    uint32_t addr = USB_BASE + 0x11C + (ep_idx - 1) * 0x10;
-    Ring_Buffer_Write_Callback(rb, recv_len, fifocopy_to_mem, (void *)addr);
-
-    if (Ring_Buffer_Get_Empty_Length(rb) < USB_FS_MAX_PACKET_SIZE) {
-      return (-USB_DC_RB_SIZE_SMALL_ERR);
-    }
-
-    USB_Set_EPx_Rdy(ep_idx);
-  }
-
-  return (0);
+  uart1_config(baudrate, databits, parity, stopbits);
 }
 
 // USB -> UART out
 static
 void usbd_cdc_acm_bulk_out(uint8_t ep)
 {
-  usb_dc_ftdi_receive_to_ringbuffer(ep, &usb_rx_rb);
+  usbd_ftdi_receive_to_ringbuffer(ep, &usb_rx_rb);
 }
 
 // UART -> USB in
 static
 void usbd_cdc_acm_bulk_in(uint8_t ep)
 {
-  usb_dc_ftdi_send_from_ringbuffer(ep, &uart1_rx_rb);
+  usbd_ftdi_send_from_ringbuffer(ep, &uart1_rx_rb);
 }
 
 static
 void usbd_cdc_jtag_out(uint8_t ep)
 {
-  usb_dc_ftdi_receive_to_ringbuffer(ep, &jtag_rx_rb);
+  usbd_ftdi_receive_to_ringbuffer(ep, &jtag_rx_rb);
 }
 
 static
 void usbd_cdc_jtag_in(uint8_t ep)
 {
-  usb_dc_ftdi_send_from_ringbuffer(ep, &jtag_tx_rb);
+  usbd_ftdi_send_from_ringbuffer(ep, &jtag_tx_rb);
 }
 
 /************************  endpoint definition  ************************/
 //For UART
-usbd_endpoint_t cdc_out_ep1 = 
-{
-    .ep_addr = CDC_OUT_EP,
-    .ep_cb = usbd_cdc_acm_bulk_out
+usbd_endpoint_t cdc_out_ep1 = {
+  .ep_addr  = CDC_OUT_EP,
+  .ep_cb    = usbd_cdc_acm_bulk_out
 };
 
-usbd_endpoint_t cdc_in_ep1 = 
-{
-    .ep_addr = CDC_IN_EP,
-    .ep_cb = usbd_cdc_acm_bulk_in
+usbd_endpoint_t cdc_in_ep1 = {
+  .ep_addr  = CDC_IN_EP,
+  .ep_cb    = usbd_cdc_acm_bulk_in
 };
 
 //For JTAG
-usbd_endpoint_t cdc_out_ep0 = 
-{
-    .ep_addr = JTAG_OUT_EP,
-    .ep_cb = usbd_cdc_jtag_out
+usbd_endpoint_t cdc_out_ep0 = {
+  .ep_addr  = JTAG_OUT_EP,
+  .ep_cb    = usbd_cdc_jtag_out
 };
 
-usbd_endpoint_t cdc_in_ep0 = 
-{
-    .ep_addr = JTAG_IN_EP,
-    .ep_cb = usbd_cdc_jtag_in
+usbd_endpoint_t cdc_in_ep0 = {
+  .ep_addr  = JTAG_IN_EP,
+  .ep_cb    = usbd_cdc_jtag_in
 };
 
 int main(void)
@@ -278,17 +144,23 @@ int main(void)
   EF_Ctrl_Read_Chip_ID(chipid);
   usb_descriptor_register(chipid);
 
-  usbd_ftdi_add_interface(&cdc_class0,&cdc_data_intf0);
-  usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_out_ep0);
-  usbd_interface_add_endpoint(&cdc_data_intf0,&cdc_in_ep0);
+  usbd_ftdi_add_interface(&cdc_class0, &cdc_data_intf0);
+  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_out_ep0);
+  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_in_ep0);
 
-  usbd_ftdi_add_interface(&cdc_class1,&cdc_data_intf1);
-  usbd_interface_add_endpoint(&cdc_data_intf1,&cdc_out_ep1);
-  usbd_interface_add_endpoint(&cdc_data_intf1,&cdc_in_ep1);
+  usbd_ftdi_add_interface(&cdc_class1, &cdc_data_intf1);
+  usbd_interface_add_endpoint(&cdc_data_intf1, &cdc_out_ep1);
+  usbd_interface_add_endpoint(&cdc_data_intf1, &cdc_in_ep1);
 
   usb_fs = usb_dc_init();
   if (usb_fs) {
-    device_control(usb_fs, DEVICE_CTRL_SET_INT, (void *)(USB_SOF_IT|USB_EP2_DATA_OUT_IT | USB_EP1_DATA_IN_IT|USB_EP4_DATA_OUT_IT|USB_EP3_DATA_IN_IT));
+    device_control(usb_fs,
+                   DEVICE_CTRL_SET_INT,
+                   (void*)(USB_SOF_IT           |
+                           USB_EP1_DATA_IN_IT   |
+                           USB_EP2_DATA_OUT_IT  |
+                           USB_EP3_DATA_IN_IT   |
+                           USB_EP4_DATA_OUT_IT));
   }
 
   while (!usb_device_is_configured()) {
