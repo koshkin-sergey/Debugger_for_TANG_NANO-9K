@@ -112,6 +112,18 @@ __ALWAYS_STATIC_INLINE
 void jtag_write(uint8_t data)
 {
   Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
+
+  if (Ring_Buffer_Get_Status(&jtag_tx_rb) == RING_BUFFER_FULL) {
+    uint64_t time = mtimer_get_time_us();
+
+    cpu_global_irq_enable();
+    while (Ring_Buffer_Get_Status(&jtag_tx_rb) == RING_BUFFER_FULL) {
+      if (mtimer_get_time_us() - time > 2000U) {
+        Ring_Buffer_Reset(&jtag_tx_rb);
+      }
+    }
+    cpu_global_irq_disable();
+  }
 }
 
 void jtag_ringbuffer_init(void)
