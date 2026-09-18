@@ -86,19 +86,11 @@ void uart1_init(void) {
 void uart1_config(uint32_t baudrate, uart_databits_t databits,
                   uart_parity_t parity, uart_stopbits_t stopbits) {
   uart_param_cfg_t cfg;
-  cfg.baudrate = baudrate;
-  cfg.stopbits = stopbits;
-  cfg.parity = parity;
 
-  if (databits == 5) {
-    cfg.databits = UART_DATA_LEN_5;
-  } else if (databits == 6) {
-    cfg.databits = UART_DATA_LEN_6;
-  } else if (databits == 7) {
-    cfg.databits = UART_DATA_LEN_7;
-  } else if (databits == 8) {
-    cfg.databits = UART_DATA_LEN_8;
-  }
+  cfg.baudrate = baudrate;
+  cfg.databits = databits;
+  cfg.parity   = parity;
+  cfg.stopbits = stopbits;
 
   device_control(uart1, DEVICE_CTRL_CONFIG, &cfg);
   device_control(uart1, DEVICE_CTRL_RESUME, NULL);

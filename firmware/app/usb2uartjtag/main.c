@@ -48,11 +48,11 @@
 
 extern struct device* usb_dc_init(void);
 
-usbd_class_t cdc_class0;
-usbd_interface_t cdc_data_intf0;
-usbd_class_t cdc_class1;
-usbd_interface_t cdc_data_intf1;
-struct device *usb_fs;
+static usbd_class_t     cdc_class0;
+static usbd_interface_t cdc_data_intf0;
+static usbd_class_t     cdc_class1;
+static usbd_interface_t cdc_data_intf1;
+static struct device    *usb_fs;
 
 /************************  led ctrl functions  ************************/
 static
@@ -72,12 +72,6 @@ void led_toggle(void)
 }
 
 /************************  API for usbd_ftdi  ************************/
-void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
-    uint8_t parity, uint8_t stopbits)
-{
-  uart1_config(baudrate, databits, parity, stopbits);
-}
-
 // USB -> UART out
 static
 void usbd_cdc_acm_bulk_out(uint8_t ep)
@@ -135,12 +129,8 @@ int main(void)
   bflb_platform_print_set(1);
   GLB_Select_Internal_Flash();
   bflb_platform_init(0);
-  uart_ringbuffer_init();
-  uart1_init();
   led_gpio_init();
   led_set(1);
-  jtag_ringbuffer_init();
-  jtag_gpio_init();
   EF_Ctrl_Read_Chip_ID(chipid);
   usb_descriptor_register(chipid);
 

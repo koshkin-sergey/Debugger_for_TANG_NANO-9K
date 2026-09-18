@@ -27,6 +27,6 @@ extern Ring_Buffer_Type jtag_rx_rb;
 
 void jtag_process(void);
 void jtag_ringbuffer_init(void);
-void jtag_gpio_init(void);
+void jtag_init(void);
 
 #endif /* JTAG_PROCESS_H_ */

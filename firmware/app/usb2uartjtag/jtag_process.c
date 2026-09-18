@@ -106,6 +106,7 @@ Ring_Buffer_Type jtag_rx_rb;
 static uint32_t clk_mhz __attribute__((section(".tcm_data"))) = CLK_MHZ_DEFAULT;
 static uint16_t clk_div __attribute__((section(".tcm_data"))) = CLK_DIV_DEFAULT;
 static uint32_t delay_val __attribute__((section(".tcm_data"))) = PIN_DELAY_CALC(CLK_MHZ_DEFAULT, CLK_DIV_DEFAULT);
+static uint32_t mpsse_state __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static jtag_fsm_state_t jtag_fsm_state __attribute__((section(".tcm_data")));
 
 __ALWAYS_STATIC_INLINE
@@ -138,7 +139,7 @@ void jtag_ringbuffer_init(void)
       cpu_global_irq_disable, cpu_global_irq_enable);
 }
 
-void jtag_gpio_init(void)
+void jtag_init(void)
 {
   gpio_write(TMS_PIN, 0U);
   gpio_set_mode(TMS_PIN, GPIO_OUTPUT_MODE);
@@ -147,6 +148,12 @@ void jtag_gpio_init(void)
   gpio_write(TCK_PIN, 1U);
   gpio_set_mode(TCK_PIN, GPIO_OUTPUT_MODE);
   gpio_set_mode(TDO_PIN, GPIO_INPUT_MODE);
+
+  clk_mhz = CLK_MHZ_DEFAULT;
+  clk_div = CLK_DIV_DEFAULT;
+  delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
+
+  mpsse_state = MPSSE_IDLE;
 }
 
 __STATIC_INLINE ATTR_CLOCK_SECTION
@@ -350,7 +357,6 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   register uint32_t cnt;
   static uint8_t jtag_inst __attribute__((section(".tcm_data")));
   static uint16_t mpsse_length __attribute__((section(".tcm_data")));
-  static uint32_t mpsse_status __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
   static uint8_t mpsse_cmd __attribute__((section(".tcm_data")));
   static uint32_t rx_pos __attribute__((section(".tcm_data")));
   static uint32_t rx_len __attribute__((section(".tcm_data")));
@@ -372,12 +378,12 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   while (rx_pos < rx_len) {
     rx_data = rx_buf[rx_pos];
 
-    switch (mpsse_status) {
+    switch (mpsse_state) {
       case MPSSE_IDLE:
         mpsse_cmd = rx_data;
         if ((mpsse_cmd & DSC_INSTRACTION) == 0U) {
           if ((mpsse_cmd & (DSC_READ_TDO|DSC_WRITE_TDI|DSC_WRITE_TMS)) != 0U) {
-            mpsse_status = MPSSE_RCV_LENGTH_1;
+            mpsse_state = MPSSE_RCV_LENGTH_1;
           }
         }
         else {
@@ -385,7 +391,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             /* Instructions*/
             case 0x80:  //This will setup the direction of the first 8 lines and force a value on the bits that are set as output.
             case 0x82:  //This will setup the direction of the high 8 lines and force a value on the bits that are set as output.
-              mpsse_status = MPSSE_SET_VALUE;
+              mpsse_state = MPSSE_SET_VALUE;
               break;
             case 0x81:  //This will read the current state of the first 8 pins and send back 1 byte.
             case 0x83:  //This will read the current state of the high 8 pins and send back 1 byte.
@@ -396,7 +402,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
               __NOP();
               break;
             case 0x86:  //This will set the clock divisor.
-              mpsse_status = MPSSE_RCV_VALUE_L;
+              mpsse_state = MPSSE_RCV_VALUE_L;
               break;
             case 0x87:  //Send immediate. This will make the chip flush its buffer back to the PC.
               __NOP();
@@ -420,7 +426,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
       case MPSSE_RCV_LENGTH_1:
         mpsse_length = rx_data;
         if ((mpsse_cmd & DSC_BIT_MODE) == 0U) {
-          mpsse_status = MPSSE_RCV_LENGTH_2;
+          mpsse_state = MPSSE_RCV_LENGTH_2;
         }
         else {
           mpsse_length &= 0x07U;
@@ -433,10 +439,10 @@ ATTR_CLOCK_SECTION void jtag_process(void)
               tx_data >>= 7U - mpsse_length;
             }
             jtag_write(tx_data);
-            mpsse_status = MPSSE_IDLE;
+            mpsse_state = MPSSE_IDLE;
           }
           else {
-            mpsse_status = MPSSE_TRANSFER_BIT;
+            mpsse_state = MPSSE_TRANSFER_BIT;
           }
         }
         break;
@@ -448,22 +454,22 @@ ATTR_CLOCK_SECTION void jtag_process(void)
             tx_data = transmit_tdi_bit(0U, 7U, (mpsse_cmd & DSC_LSB_FIRST) != 0U);
             jtag_write(tx_data);
           } while (mpsse_length-- > 0U);
-          mpsse_status = MPSSE_IDLE;
+          mpsse_state = MPSSE_IDLE;
         }
         else {
-          mpsse_status = MPSSE_TRANSFER_BYTE;
+          mpsse_state = MPSSE_TRANSFER_BYTE;
         }
         break;
 
       case MPSSE_RCV_VALUE_L:
         clk_div = rx_data;
-        mpsse_status = MPSSE_RCV_VALUE_H;
+        mpsse_state = MPSSE_RCV_VALUE_H;
         break;
 
       case MPSSE_RCV_VALUE_H:
         clk_div |= (uint16_t)rx_data << 8;
         delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
-        mpsse_status = MPSSE_IDLE;
+        mpsse_state = MPSSE_IDLE;
         break;
 
       case MPSSE_TRANSFER_BYTE:
@@ -484,7 +490,7 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           --mpsse_length;
         }
         else {
-          mpsse_status = MPSSE_IDLE;
+          mpsse_state = MPSSE_IDLE;
         }
         break;
 
@@ -522,19 +528,19 @@ ATTR_CLOCK_SECTION void jtag_process(void)
           jtag_write(tx_data);
         }
 
-        mpsse_status = MPSSE_IDLE;
+        mpsse_state = MPSSE_IDLE;
         break;
 
       case MPSSE_SET_VALUE:
-        mpsse_status = MPSSE_SET_DIRECTION;
+        mpsse_state = MPSSE_SET_DIRECTION;
         break;
 
       case MPSSE_SET_DIRECTION:
-        mpsse_status = MPSSE_IDLE;
+        mpsse_state = MPSSE_IDLE;
         break;
 
       default:
-        mpsse_status = MPSSE_IDLE;
+        mpsse_state = MPSSE_IDLE;
         break;
     }
 

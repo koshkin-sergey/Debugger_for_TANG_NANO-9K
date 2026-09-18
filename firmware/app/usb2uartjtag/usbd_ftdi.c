@@ -26,14 +26,13 @@
 #include "hal_usb.h"
 #include "hal_mtimer.h"
 #include "bl702_usb.h"
+#include "uart_interface.h"
+#include "jtag_process.h"
 
 static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
 static volatile uint32_t sof_tick;
 static uint8_t Latency_Timer;
 static volatile uint32_t last_send;
-
-const char *stop_name[] = {"1", "1.5", "2"};
-const char *parity_name[] = {"N", "O", "E", "M", "S"};
 
 static const uint16_t ftdi_eeprom_info[] = {
   0x0800, 0x0403, 0x6010, 0x0500, 0x3280, 0x0000, 0x0200, 0x1096,
@@ -45,12 +44,6 @@ static const uint16_t ftdi_eeprom_info[] = {
   0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
   0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x1027
 };
-
-static void usbd_ftdi_reset(void)
-{
-  Latency_Timer = 16;  // ms
-  sof_tick = 0;
-}
 
 /* Requests */
 #define SIO_RESET_REQUEST             0x00 /* Reset the port */
@@ -85,41 +78,109 @@ static void usbd_ftdi_reset(void)
 
 #define FTDI_USB_CLK 48000000
 
+static void usbd_ftdi_reset(void)
+{
+  Latency_Timer = 16;  // ms
+  sof_tick = 0;
+
+  uart_ringbuffer_init();
+  uart1_init();
+}
+
 static void ftdi_set_baudrate(uint32_t itdf_divisor, uint32_t *actual_baudrate)
 {
   int baudrate;
   uint8_t frac[] = {0, 8, 4, 2, 6, 10, 12, 14};
   int divisor = itdf_divisor & 0x3fff;
+
   divisor <<= 4;
   divisor |= frac[(itdf_divisor >> 14) & 0x07];
 
-  if (itdf_divisor == 0x01) {
-    baudrate = 2000000;
-  } else if (itdf_divisor == 0x00) {
+  if (itdf_divisor == 0) {
     baudrate = 3000000;
-  } else {
+  }
+  else if (itdf_divisor == 1) {
+    baudrate = 2000000;
+  }
+  else {
     baudrate = FTDI_USB_CLK / divisor;
   }
+
   if (baudrate > 10000 && baudrate < 12000) {
     *actual_baudrate = (baudrate - 10000) * 10000;
   } else
     *actual_baudrate = baudrate;
 }
 
-//static char datatmp[2]={0x32, 0x60};
+static void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
+                                      uint8_t parity, uint8_t stopbits)
+{
+  uart_databits_t uart_databits;
+  uart_parity_t uart_parity;
+  uart_stopbits_t uart_stopbits;
+
+  switch (databits) {
+    case 5:
+      uart_databits = UART_DATA_LEN_5;
+      break;
+    case 6:
+      uart_databits = UART_DATA_LEN_6;
+      break;
+    case 7:
+      uart_databits = UART_DATA_LEN_7;
+      break;
+    case 8:
+    default:
+      uart_databits = UART_DATA_LEN_8;
+      break;
+  }
+
+  switch (parity) {
+    default:
+    case 0:
+      uart_parity = UART_PAR_NONE;
+      break;
+    case 1:
+      uart_parity = UART_PAR_ODD;
+      break;
+    case 2:
+      uart_parity = UART_PAR_EVEN;
+      break;
+  }
+
+  switch (stopbits) {
+    default:
+    case 0:
+      uart_stopbits = UART_STOP_ONE;
+      break;
+    case 1:
+      uart_stopbits = UART_STOP_ONE_D_FIVE;
+      break;
+    case 2:
+      uart_stopbits = UART_STOP_TWO;
+      break;
+  }
+
+  uart1_config(baudrate, uart_databits, uart_parity, uart_stopbits);
+}
+
+static void usbd_ftdi_set_dtr(bool dtr)
+{
+
+}
+static void usbd_ftdi_set_rts(bool rts)
+{
+
+}
+
 static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
                                        uint8_t **data, uint32_t *len)
 {
   static uint32_t actual_baudrate = 1200;
 
   switch (pSetup->bRequest) {
-    case SIO_READ_EEPROM_REQUEST:
-      *data = (uint8_t*)&ftdi_eeprom_info[pSetup->wIndexL];
-      *len  = sizeof(ftdi_eeprom_info[0]);
-      break;
-
     case SIO_RESET_REQUEST:
-//      usbd_ftdi_reset();
+      usbd_ftdi_reset();
       break;
 
     case SIO_SET_MODEM_CTRL_REQUEST:
@@ -142,14 +203,10 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
 
       break;
 
-    case SIO_SET_BAUDRATE_REQUEST: //wValue，2个字节波特率
+    case SIO_SET_BAUDRATE_REQUEST:
     {
-      uint8_t baudrate_high = (pSetup->wIndex >> 8);
-      ftdi_set_baudrate(pSetup->wValue | (baudrate_high << 16),
-          &actual_baudrate);
-      if (actual_baudrate != 1200) {
-        usbd_ftdi_set_line_coding(actual_baudrate, 8, 0, 0);
-      }
+      ftdi_set_baudrate(pSetup->wValue | (pSetup->wIndexH << 16), &actual_baudrate);
+      usbd_ftdi_set_line_coding(actual_baudrate, 8, 0, 0);
       break;
     }
 
@@ -160,11 +217,10 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
        * D11-D12 		STOP_BIT_1=0, STOP_BIT_15=1, STOP_BIT_2=2
        * D14  		BREAK_OFF=0, BREAK_ON=1
        **/
-      if (actual_baudrate != 1200) {
-        //USBD_LOG("CDC_SET_LINE_CODING <%d %d %s %s>\r\n",actual_baudrate,(uint8_t)pSetup->wValue,parity_name[(uint8_t)(pSetup->wValue>>8)],stop_name[(uint8_t)(pSetup->wValue>>11)]);
-        usbd_ftdi_set_line_coding(actual_baudrate, (uint8_t)pSetup->wValue,
-            (uint8_t)(pSetup->wValue >> 8), (uint8_t)(pSetup->wValue >> 11));
-      }
+      usbd_ftdi_set_line_coding(actual_baudrate,
+                                pSetup->wValueL,
+                                pSetup->wValueH & 0x07,
+                                (pSetup->wValueH >> 3) & 0x03);
       break;
 
     case SIO_POLL_MODEM_STATUS_REQUEST:
@@ -221,12 +277,18 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
       break;
 
     case SIO_SET_BITMODE_REQUEST:
+      if (pSetup->wValueH == 0x02U) {
+        jtag_ringbuffer_init();
+        jtag_init();
+      }
+      break;
 
+    case SIO_READ_EEPROM_REQUEST:
+      *data = (uint8_t*)&ftdi_eeprom_info[pSetup->wIndexL];
+      *len  = sizeof(ftdi_eeprom_info[0]);
       break;
 
     default:
-      USBD_LOG_DBG("CDC ACM request 0x%x, value 0x%x\r\n",
-          pSetup->bRequest, pSetup->wValue);
       return (-1);
   }
 
@@ -245,20 +307,6 @@ static void ftdi_notify_handler(uint8_t event, void *arg)
     default:
       break;
   }
-}
-
-__weak void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
-    uint8_t parity, uint8_t stopbits)
-{
-
-}
-__weak void usbd_ftdi_set_dtr(bool dtr)
-{
-
-}
-__weak void usbd_ftdi_set_rts(bool rts)
-{
-
 }
 
 void usbd_ftdi_add_interface(usbd_class_t *class, usbd_interface_t *intf)
@@ -352,7 +400,7 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 
   uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
 
-  if ((Ring_Buffer_Get_Length(rb) == USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
+  if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
       (sof_tick - last_send >= Latency_Timer)) {
     memcopy_to_fifo((void *)addr,
                     (uint8_t *)&ftdi_modem_status[0],
