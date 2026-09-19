@@ -35,7 +35,7 @@
 #define TDO_PIN                   GPIO_PIN_15
 
 /* Configurable delay for clock generation */
-#define PIN_DELAY_CYCLES          3U  // Number of cycles for one iteration
+#define PIN_DELAY_CYCLES          4U  // Number of cycles for one iteration
 #define PIN_DELAY_NS              (PIN_DELAY_CYCLES * 8U)
 
 __ALWAYS_STATIC_INLINE
@@ -43,8 +43,10 @@ void PIN_DELAY (uint32_t delay)
 {
   __ASM volatile (
     "0:               \n\t"
+    "beqz %0, 1f      \n\t"
     "addi %0, %0, -1  \n\t"
-    "bnez %0, 0b      \n"
+    "j    0b          \n\t"
+    "1:               \n\t"
   : "+l" (delay) : : "cc"
   );
 }

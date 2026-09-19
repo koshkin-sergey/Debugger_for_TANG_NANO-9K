@@ -62,6 +62,10 @@ static const uint16_t ftdi_eeprom_info[] = {
 #define SIO_WRITE_EEPROM_REQUEST      0x91
 #define SIO_ERASE_EEPROM_REQUEST      0x92
 
+#define SIO_RESET_VALUE_SIO           0
+#define SIO_RESET_VALUE_PURGE_RX      1
+#define SIO_RESET_VALUE_PURGE_TX      2
+
 #define SIO_DISABLE_FLOW_CTRL 0x0
 #define SIO_RTS_CTS_HS (0x1 << 8)
 #define SIO_DTR_DSR_HS (0x2 << 8)
@@ -180,7 +184,17 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
 
   switch (pSetup->bRequest) {
     case SIO_RESET_REQUEST:
-      usbd_ftdi_reset();
+      switch (pSetup->wValueL) {
+        case SIO_RESET_VALUE_SIO:
+          usbd_ftdi_reset();
+          break;
+        case SIO_RESET_VALUE_PURGE_RX:
+          Ring_Buffer_Reset(&jtag_rx_rb);
+          break;
+        case SIO_RESET_VALUE_PURGE_TX:
+          Ring_Buffer_Reset(&jtag_tx_rb);
+          break;
+      }
       break;
 
     case SIO_SET_MODEM_CTRL_REQUEST:

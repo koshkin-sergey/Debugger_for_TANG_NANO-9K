@@ -405,6 +405,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
               mpsse_state = MPSSE_RCV_VALUE_L;
               break;
             case 0x87:  //Send immediate. This will make the chip flush its buffer back to the PC.
+            case 0x88:
+            case 0x89:
               __NOP();
               break;
             case 0x8a:  //Disables the clk divide by 5 to allow for a 60MHz master clock
@@ -415,6 +417,43 @@ ATTR_CLOCK_SECTION void jtag_process(void)
               clk_mhz = 12U;
               delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
               break;
+            case 0x8C:
+            case 0x8D:
+              __NOP();
+              break;
+            case 0x8E:
+              ++rx_pos;
+              break;
+            case 0x8F:
+              ++rx_pos;
+              ++rx_pos;
+              break;
+            case 0x90:
+              ++rx_pos;
+              break;
+            case 0x91:
+            case 0x92:
+              ++rx_pos;
+              ++rx_pos;
+              break;
+            case 0x93:
+              ++rx_pos;
+              ++rx_pos;
+              ++rx_pos;
+              break;
+            case 0x94:
+            case 0x95:
+            case 0x96:
+            case 0x97:
+              __NOP();
+              break;
+            case 0x9C:
+            case 0x9D:
+              ++rx_pos;
+              ++rx_pos;
+            case 0x9E:
+              ++rx_pos;
+              ++rx_pos;
             default:
               jtag_write(0xFA);
               jtag_write(mpsse_cmd);
