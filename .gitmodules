@@ -1,3 +1,0 @@
-[submodule "firmware/bl_mcu_sdk"]
-	path = firmware/bl_mcu_sdk
-	url = https://github.com/sipeed/bl_mcu_sdk.git
