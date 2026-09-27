@@ -153,7 +153,6 @@
 		<buildTargets>
 			<target name="clean" path="" targetID="org.eclipse.cdt.build.MakeTargetBuilder">
 				<buildCommand>make</buildCommand>
-				<buildArguments/>
 				<buildTarget>clean</buildTarget>
 				<stopOnError>true</stopOnError>
 				<useDefaultCommand>false</useDefaultCommand>
@@ -161,7 +160,7 @@
 			</target>
 			<target name="download" path="" targetID="org.eclipse.cdt.build.MakeTargetBuilder">
 				<buildCommand>make</buildCommand>
-				<buildArguments>INTERFACE=uart COMx=/dev/ttyACM0 BIN=./out/app/usb2uartjtag/usb2uartjtag_bl702.bin</buildArguments>
+				<buildArguments>INTERFACE=uart COMx=/dev/ttyACM0</buildArguments>
 				<buildTarget>download</buildTarget>
 				<stopOnError>true</stopOnError>
 				<useDefaultCommand>false</useDefaultCommand>

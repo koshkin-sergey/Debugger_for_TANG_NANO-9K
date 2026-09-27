@@ -22,6 +22,7 @@
  * 
  */
 
+#include "usbd_core.h"
 #include "usbd_ftdi.h"
 #include "hal_usb.h"
 #include "hal_mtimer.h"
@@ -29,30 +30,11 @@
 #include "uart_interface.h"
 #include "jtag_process.h"
 
-static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
-static volatile uint32_t sof_tick;
-static uint8_t Latency_Timer;
-static volatile uint32_t last_send;
-static bool send_immediate;
-
-static const uint16_t ftdi_eeprom_info[] = {
-  0x0800, 0x0403, 0x6010, 0x0500, 0x3280, 0x0000, 0x0200, 0x0E96,
-  0x1AA4, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0X0000, 0x0000, 0x0000, 0x030E, 0x0053, 0x0069, 0x0070, 0x0065,
-  0x0065, 0x0064, 0x031A, 0x0055, 0x0053, 0x0042, 0x0020, 0x0044,
-  0x0065, 0x0062, 0x0075, 0x0067, 0x0067, 0x0065, 0x0072, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x4E1B
-};
+/* USB Endpoint Number */
+#define JTAG_IN_EP                    0x81
+#define JTAG_OUT_EP                   0x02
+#define CDC_IN_EP                     0x83
+#define CDC_OUT_EP                    0x04
 
 /* Requests */
 #define SIO_RESET_REQUEST             0x00 /* Reset the port */
@@ -90,7 +72,94 @@ static const uint16_t ftdi_eeprom_info[] = {
 
 #define FTDI_USB_CLK                  48000000
 
-static void usbd_ftdi_reset(void)
+static void usbd_cdc_acm_bulk_in(uint8_t ep);
+static void usbd_cdc_acm_bulk_out(uint8_t ep);
+static void usbd_cdc_jtag_in(uint8_t ep);
+static void usbd_cdc_jtag_out(uint8_t ep);
+static int receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
+static int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
+
+static usbd_class_t     cdc_class0;
+static usbd_interface_t cdc_data_intf0;
+static usbd_class_t     cdc_class1;
+static usbd_interface_t cdc_data_intf1;
+
+static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
+static volatile uint32_t sof_tick;
+static uint8_t Latency_Timer;
+static volatile uint32_t last_send;
+static bool send_immediate = false;
+static bool jtag_enable = false;
+
+// Endpoints for JTAG
+static usbd_endpoint_t cdc_in_ep0 = {
+  .ep_addr  = JTAG_IN_EP,
+  .ep_cb    = usbd_cdc_jtag_in
+};
+
+static usbd_endpoint_t cdc_out_ep0 = {
+  .ep_addr  = JTAG_OUT_EP,
+  .ep_cb    = usbd_cdc_jtag_out
+};
+
+// Endpoints for UART
+static usbd_endpoint_t cdc_in_ep1 = {
+  .ep_addr  = CDC_IN_EP,
+  .ep_cb    = usbd_cdc_acm_bulk_in
+};
+
+static usbd_endpoint_t cdc_out_ep1 = {
+  .ep_addr  = CDC_OUT_EP,
+  .ep_cb    = usbd_cdc_acm_bulk_out
+};
+
+static const uint16_t ftdi_eeprom_info[] = {
+  0x0800, 0x0403, 0x6010, 0x0500, 0x3280, 0x0000, 0x0200, 0x0E96,
+  0x1AA4, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0X0000, 0x0000, 0x0000, 0x030E, 0x0053, 0x0069, 0x0070, 0x0065,
+  0x0065, 0x0064, 0x031A, 0x0055, 0x0053, 0x0042, 0x0020, 0x0044,
+  0x0065, 0x0062, 0x0075, 0x0067, 0x0067, 0x0065, 0x0072, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x4E1B
+};
+
+// USB -> UART out
+static
+void usbd_cdc_acm_bulk_out(uint8_t ep)
+{
+  receive_to_ringbuffer(ep, &usb_rx_rb);
+}
+
+// UART -> USB in
+static
+void usbd_cdc_acm_bulk_in(uint8_t ep)
+{
+  send_from_ringbuffer(ep, &uart1_rx_rb);
+}
+
+static
+void usbd_cdc_jtag_out(uint8_t ep)
+{
+  receive_to_ringbuffer(ep, &jtag_rx_rb);
+}
+
+static
+void usbd_cdc_jtag_in(uint8_t ep)
+{
+  send_from_ringbuffer(ep, &jtag_tx_rb);
+}
+
+static
+void usbd_ftdi_reset(void)
 {
   Latency_Timer = 16;  // ms
   sof_tick = 0;
@@ -99,7 +168,8 @@ static void usbd_ftdi_reset(void)
   uart1_init();
 }
 
-static void ftdi_set_baudrate(uint32_t itdf_divisor, uint32_t *actual_baudrate)
+static
+void ftdi_set_baudrate(uint32_t itdf_divisor, uint32_t *actual_baudrate)
 {
   int baudrate;
   uint8_t frac[] = {0, 8, 4, 2, 6, 10, 12, 14};
@@ -124,7 +194,8 @@ static void ftdi_set_baudrate(uint32_t itdf_divisor, uint32_t *actual_baudrate)
     *actual_baudrate = baudrate;
 }
 
-static void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
+static
+void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
                                       uint8_t parity, uint8_t stopbits)
 {
   uart_databits_t uart_databits;
@@ -176,16 +247,20 @@ static void usbd_ftdi_set_line_coding(uint32_t baudrate, uint8_t databits,
   uart1_config(baudrate, uart_databits, uart_parity, uart_stopbits);
 }
 
-static void usbd_ftdi_set_dtr(bool dtr)
+static
+void usbd_ftdi_set_dtr(bool dtr)
 {
 
 }
-static void usbd_ftdi_set_rts(bool rts)
+
+static
+void usbd_ftdi_set_rts(bool rts)
 {
 
 }
 
-static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
+static
+int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
                                        uint8_t **data, uint32_t *len)
 {
   static uint32_t actual_baudrate = 1200;
@@ -293,9 +368,16 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
       break;
 
     case SIO_SET_BITMODE_REQUEST:
-      if (pSetup->wValueH == 0x02U) {
-        jtag_ringbuffer_init();
-        jtag_init();
+      switch (pSetup->wValueH) {
+        case 0x00:
+          jtag_enable = false;
+          break;
+
+        case 0x02U:
+          jtag_ringbuffer_init();
+          jtag_init();
+          jtag_enable = true;
+          break;
       }
       break;
 
@@ -310,7 +392,8 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
 
   return (0);
 }
-static void ftdi_notify_handler(uint8_t event, void *arg)
+static
+void ftdi_notify_handler(uint8_t event, void *arg)
 {
   switch (event) {
     case USB_EVENT_RESET:
@@ -318,13 +401,13 @@ static void ftdi_notify_handler(uint8_t event, void *arg)
       break;
     case USB_EVENT_SOF:
       sof_tick++;
-      USBD_LOG_DBG("tick: %d\r\n", sof_tick);
       break;
     default:
       break;
   }
 }
 
+static
 void usbd_ftdi_add_interface(usbd_class_t *class, usbd_interface_t *intf)
 {
   static usbd_class_t *last_class = NULL;
@@ -341,7 +424,8 @@ void usbd_ftdi_add_interface(usbd_class_t *class, usbd_interface_t *intf)
   usbd_class_add_interface(class, intf);
 }
 
-int usbd_ftdi_receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
+static
+int receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
   uint32_t recv_len;
@@ -384,7 +468,8 @@ int usbd_ftdi_receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
   return (USB_DC_OK);
 }
 
-int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
+static
+int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 {
   uint8_t ep_idx;
   static bool zlp_flag = false;
@@ -439,6 +524,26 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
   }
 
   return (USB_DC_OK);
+}
+
+void usbd_ftdi_init(void)
+{
+  usbd_ftdi_add_interface(&cdc_class0, &cdc_data_intf0);
+  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_out_ep0);
+  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_in_ep0);
+
+  usbd_ftdi_add_interface(&cdc_class1, &cdc_data_intf1);
+  usbd_interface_add_endpoint(&cdc_data_intf1, &cdc_out_ep1);
+  usbd_interface_add_endpoint(&cdc_data_intf1, &cdc_in_ep1);
+}
+
+void usbd_ftdi_process(void)
+{
+  uart_send_from_ringbuffer();
+
+  if (jtag_enable == true) {
+    jtag_process();
+  }
 }
 
 void usbd_ftdi_send_immediate(void)

@@ -117,7 +117,7 @@ uint8_t cdc_descriptor[] = {
     ///////////////////////////////////////
     0x07,                         /* bLength */
     USB_DESCRIPTOR_TYPE_ENDPOINT, /* bDescriptorType */
-    CDC_IN_EP,                    /* bEndpointAddress */
+    0x83,                         /* bEndpointAddress */
     0x02,                         /* bmAttributes */
     0x40, 0x00,                   /* wMaxPacketSize */
     0x01,                         /* bInterval */
@@ -127,7 +127,7 @@ uint8_t cdc_descriptor[] = {
     ///////////////////////////////////////
     0x07,                         /* bLength */
     USB_DESCRIPTOR_TYPE_ENDPOINT, /* bDescriptorType */
-    CDC_OUT_EP,                   /* bEndpointAddress */
+    0x04,                         /* bEndpointAddress */
     0x02,                         /* bmAttributes */
     0x40, 0x00,                   /* wMaxPacketSize */
     0x01,                         /* bInterval */

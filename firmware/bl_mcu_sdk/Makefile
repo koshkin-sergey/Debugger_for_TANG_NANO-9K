@@ -17,12 +17,11 @@ RM = cmake -E remove_directory
 #flash tool config
 INTERFACE?=uart
 COMx?=
-BIN?=
 BAUDRATE ?=2000000
 ifeq ($(INTERFACE),uart)
-FLASH_DOWNLOAD_CONFIG:=--chipname=$(CHIP) --interface=uart --port=$(COMx) --baudrate=$(BAUDRATE) --xtal=32M --firmware=$(BIN)
+FLASH_DOWNLOAD_CONFIG:=--chipname=$(CHIP) --interface=uart --port=$(COMx) --baudrate=$(BAUDRATE)
 else
-FLASH_DOWNLOAD_CONFIG:=--chipname=$(CHIP) --interface=$(INTERFACE) --xtal=32M --firmware=$(BIN)
+FLASH_DOWNLOAD_CONFIG:=--chipname=$(CHIP) --interface=$(INTERFACE)
 endif
 
 #option config to use
