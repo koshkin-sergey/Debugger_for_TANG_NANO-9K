@@ -72,6 +72,8 @@
 
 #define FTDI_USB_CLK                  48000000
 
+#define time_after_eq(a,b)            ((int32_t)(a) - (int32_t)(b) >= 0)
+
 static void usbd_cdc_acm_bulk_in(uint8_t ep);
 static void usbd_cdc_acm_bulk_out(uint8_t ep);
 static void usbd_cdc_jtag_in(uint8_t ep);
@@ -81,15 +83,13 @@ static int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
 
 static usbd_class_t     cdc_class0;
 static usbd_interface_t cdc_data_intf0;
-static usbd_class_t     cdc_class1;
-static usbd_interface_t cdc_data_intf1;
 
 static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
-static volatile uint32_t sof_tick;
-static uint8_t Latency_Timer;
-static volatile uint32_t last_send;
-static bool send_immediate = false;
-static bool jtag_enable = false;
+static uint32_t sof_tick;
+static uint8_t latency_timer;
+static uint32_t latency_timeout;
+static bool send_immediate;
+static bool jtag_enable;
 
 // Endpoints for JTAG
 static usbd_endpoint_t cdc_in_ep0 = {
@@ -161,8 +161,11 @@ void usbd_cdc_jtag_in(uint8_t ep)
 static
 void usbd_ftdi_reset(void)
 {
-  Latency_Timer = 16;  // ms
-  sof_tick = 0;
+  latency_timer = 16;  // ms
+  sof_tick = 0U;
+  latency_timeout = latency_timer;
+  send_immediate = false;
+  jtag_enable = false;
 
   uart_ringbuffer_init();
   uart1_init();
@@ -359,12 +362,12 @@ int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
       break;
 
     case SIO_SET_LATENCY_TIMER_REQUEST:
-      Latency_Timer = pSetup->wValueL;
+      latency_timer = pSetup->wValueL;
       break;
 
     case SIO_GET_LATENCY_TIMER_REQUEST:
-      *data = &Latency_Timer;
-      *len = sizeof(Latency_Timer);
+      *data = &latency_timer;
+      *len = sizeof(latency_timer);
       break;
 
     case SIO_SET_BITMODE_REQUEST:
@@ -405,23 +408,6 @@ void ftdi_notify_handler(uint8_t event, void *arg)
     default:
       break;
   }
-}
-
-static
-void usbd_ftdi_add_interface(usbd_class_t *class, usbd_interface_t *intf)
-{
-  static usbd_class_t *last_class = NULL;
-
-  if (last_class != class) {
-    last_class = class;
-    usbd_class_register(class);
-  }
-
-  intf->class_handler = NULL;
-  intf->custom_handler = NULL;
-  intf->vendor_handler = ftdi_vendor_request_handler;
-  intf->notify_handler = ftdi_notify_handler;
-  usbd_class_add_interface(class, intf);
 }
 
 static
@@ -502,7 +488,7 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
   uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
 
   if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
-      (sof_tick - last_send >= Latency_Timer) || (send_immediate = true)) {
+      time_after_eq(sof_tick, latency_timeout) || (send_immediate == true)) {
     memcopy_to_fifo((void *)addr,
                     (uint8_t *)&ftdi_modem_status[0],
                     sizeof(ftdi_modem_status));
@@ -516,7 +502,7 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
     }
 
     USB_Set_EPx_Rdy(ep_idx);
-    last_send = sof_tick;
+    latency_timeout = sof_tick + latency_timer;
     send_immediate = false;
   }
   else {
@@ -528,13 +514,17 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 
 void usbd_ftdi_init(void)
 {
-  usbd_ftdi_add_interface(&cdc_class0, &cdc_data_intf0);
+  cdc_data_intf0.class_handler = NULL;
+  cdc_data_intf0.custom_handler = NULL;
+  cdc_data_intf0.notify_handler = ftdi_notify_handler;
+  cdc_data_intf0.vendor_handler = ftdi_vendor_request_handler;
+
+  usbd_class_register(&cdc_class0);
+  usbd_class_add_interface(&cdc_class0, &cdc_data_intf0);
   usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_out_ep0);
   usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_in_ep0);
-
-  usbd_ftdi_add_interface(&cdc_class1, &cdc_data_intf1);
-  usbd_interface_add_endpoint(&cdc_data_intf1, &cdc_out_ep1);
-  usbd_interface_add_endpoint(&cdc_data_intf1, &cdc_in_ep1);
+  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_out_ep1);
+  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_in_ep1);
 }
 
 void usbd_ftdi_process(void)
