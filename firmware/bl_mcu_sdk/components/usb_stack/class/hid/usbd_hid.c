@@ -147,7 +147,7 @@ int hid_class_request_handler(struct usb_setup_packet *setup, uint8_t **data, ui
 
     switch (setup->bRequest) {
         case HID_REQUEST_GET_REPORT:
-            USBD_LOG("GET_REPORT\r\n",1);
+            USBD_LOG_DBG("GET_REPORT\r\n",1);
             if(current_hid_intf->get_report_callback)
                 current_hid_intf->get_report_callback(data,len);
             else{
@@ -156,33 +156,33 @@ int hid_class_request_handler(struct usb_setup_packet *setup, uint8_t **data, ui
             }
             break;
         case HID_REQUEST_GET_IDLE:
-            USBD_LOG("GET_IDLE\r\n",1);
+            USBD_LOG_DBG("GET_IDLE\r\n",1);
             if(current_hid_intf->get_idle_callback)
                 current_hid_intf->idle_state=current_hid_intf->get_idle_callback(setup->wValueL);
             *data = (uint8_t *)&current_hid_intf->idle_state;
             *len = 1;
             break;
         case HID_REQUEST_GET_PROTOCOL:
-            USBD_LOG("GET_PROTOCOL\r\n",1);
+            USBD_LOG_DBG("GET_PROTOCOL\r\n",1);
             if(current_hid_intf->get_protocol_callback)
                 current_hid_intf->protocol=current_hid_intf->get_protocol_callback();
             *data = (uint8_t *)&current_hid_intf->protocol;
             *len = 1;
             break;
         case HID_REQUEST_SET_REPORT:
-            USBD_LOG("SET_REPORT\r\n",1);
+            USBD_LOG_DBG("SET_REPORT\r\n",1);
             if(current_hid_intf->set_report_callback)
                 current_hid_intf->set_report_callback(*data,*len);
             current_hid_intf->report = **data;
             break;
         case HID_REQUEST_SET_IDLE:
-            USBD_LOG("SET_IDLE\r\n",1);
+            USBD_LOG_DBG("SET_IDLE\r\n",1);
             if(current_hid_intf->set_idle_callback)
                 current_hid_intf->set_idle_callback(setup->wValueL,setup->wValueH);
             current_hid_intf->idle_state = setup->wValueH;
             break;
         case HID_REQUEST_SET_PROTOCOL:
-            USBD_LOG("SET_PROTOCOL\r\n",1);
+            USBD_LOG_DBG("SET_PROTOCOL\r\n",1);
             if(current_hid_intf->set_protocol_callback)
                 current_hid_intf->set_protocol_callback(setup->wValueL);
             current_hid_intf->protocol = setup->wValueL;
@@ -198,7 +198,7 @@ int hid_class_request_handler(struct usb_setup_packet *setup, uint8_t **data, ui
 
 static void hid_notify_handler(uint8_t event, void *arg)
 {
-    USBD_LOG("hid_notify_handler:event 0x%02x\r\n",event);
+    USBD_LOG_DBG("hid_notify_handler:event 0x%02x\r\n",event);
     switch (event) {
         case USB_EVENT_RESET:
             usbd_hid_reset();

@@ -33,16 +33,25 @@ static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
 static volatile uint32_t sof_tick;
 static uint8_t Latency_Timer;
 static volatile uint32_t last_send;
+static bool send_immediate;
 
 static const uint16_t ftdi_eeprom_info[] = {
-  0x0800, 0x0403, 0x6010, 0x0500, 0x3280, 0x0000, 0x0200, 0x1096,
-  0x1aa6, 0x0000, 0x0046, 0x0310, 0x004f, 0x0070, 0x0065, 0x006e,
-  0x002d, 0x0045, 0x0043, 0x031a, 0x0055, 0x0053, 0x0042, 0x0020,
-  0x0044, 0x0065, 0x0062, 0x0075, 0x0067, 0x0067, 0x0065, 0x0072,
+  0x0800, 0x0403, 0x6010, 0x0500, 0x3280, 0x0000, 0x0200, 0x0E96,
+  0x1AA4, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
   0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
   0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
   0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x1027
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0X0000, 0x0000, 0x0000, 0x030E, 0x0053, 0x0069, 0x0070, 0x0065,
+  0x0065, 0x0064, 0x031A, 0x0055, 0x0053, 0x0042, 0x0020, 0x0044,
+  0x0065, 0x0062, 0x0075, 0x0067, 0x0067, 0x0065, 0x0072, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+  0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x4E1B
 };
 
 /* Requests */
@@ -66,21 +75,20 @@ static const uint16_t ftdi_eeprom_info[] = {
 #define SIO_RESET_VALUE_PURGE_RX      1
 #define SIO_RESET_VALUE_PURGE_TX      2
 
-#define SIO_DISABLE_FLOW_CTRL 0x0
-#define SIO_RTS_CTS_HS (0x1 << 8)
-#define SIO_DTR_DSR_HS (0x2 << 8)
-#define SIO_XON_XOFF_HS (0x4 << 8)
+#define SIO_DISABLE_FLOW_CTRL         0x0
+#define SIO_RTS_CTS_HS                (0x1 << 8)
+#define SIO_DTR_DSR_HS                (0x2 << 8)
+#define SIO_XON_XOFF_HS               (0x4 << 8)
 
-#define SIO_SET_DTR_MASK 0x1
-#define SIO_SET_DTR_HIGH ( 1 | ( SIO_SET_DTR_MASK  << 8))
-#define SIO_SET_DTR_LOW  ( 0 | ( SIO_SET_DTR_MASK  << 8))
-#define SIO_SET_RTS_MASK 0x2
-#define SIO_SET_RTS_HIGH ( 2 | ( SIO_SET_RTS_MASK << 8 ))
-#define SIO_SET_RTS_LOW ( 0 | ( SIO_SET_RTS_MASK << 8 ))
+#define SIO_SET_DTR_MASK              0x1
+#define SIO_SET_DTR_HIGH              ( 1 | ( SIO_SET_DTR_MASK  << 8))
+#define SIO_SET_DTR_LOW               ( 0 | ( SIO_SET_DTR_MASK  << 8))
+#define SIO_SET_RTS_MASK              0x2
+#define SIO_SET_RTS_HIGH              ( 2 | ( SIO_SET_RTS_MASK << 8 ))
+#define SIO_SET_RTS_LOW               ( 0 | ( SIO_SET_RTS_MASK << 8 ))
+#define SIO_RTS_CTS_HS                (0x1 << 8)
 
-#define SIO_RTS_CTS_HS (0x1 << 8)
-
-#define FTDI_USB_CLK 48000000
+#define FTDI_USB_CLK                  48000000
 
 static void usbd_ftdi_reset(void)
 {
@@ -199,16 +207,12 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
 
     case SIO_SET_MODEM_CTRL_REQUEST:
       if (pSetup->wValue == SIO_SET_DTR_HIGH) {
-        //USBD_LOG("DTR 1\r\n");
         usbd_ftdi_set_dtr(true);
       } else if (pSetup->wValue == SIO_SET_DTR_LOW) {
-        //USBD_LOG("DTR 0\r\n");
         usbd_ftdi_set_dtr(false);
       } else if (pSetup->wValue == SIO_SET_RTS_HIGH) {
-        //USBD_LOG("RTS 1\r\n");
         usbd_ftdi_set_rts(true);
       } else if (pSetup->wValue == SIO_SET_RTS_LOW) {
-        //USBD_LOG("RTS 0\r\n");
         usbd_ftdi_set_rts(false);
       }
       break;
@@ -218,11 +222,9 @@ static int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
       break;
 
     case SIO_SET_BAUDRATE_REQUEST:
-    {
       ftdi_set_baudrate(pSetup->wValue | (pSetup->wIndexH << 16), &actual_baudrate);
       usbd_ftdi_set_line_coding(actual_baudrate, 8, 0, 0);
       break;
-    }
 
     case SIO_SET_DATA_REQUEST:
       /**
@@ -415,7 +417,7 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
   uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
 
   if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
-      (sof_tick - last_send >= Latency_Timer)) {
+      (sof_tick - last_send >= Latency_Timer) || (send_immediate = true)) {
     memcopy_to_fifo((void *)addr,
                     (uint8_t *)&ftdi_modem_status[0],
                     sizeof(ftdi_modem_status));
@@ -430,10 +432,16 @@ int usbd_ftdi_send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 
     USB_Set_EPx_Rdy(ep_idx);
     last_send = sof_tick;
+    send_immediate = false;
   }
   else {
     return (-USB_DC_RB_SIZE_SMALL_ERR);
   }
 
   return (USB_DC_OK);
+}
+
+void usbd_ftdi_send_immediate(void)
+{
+  send_immediate = true;
 }

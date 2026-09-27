@@ -27,13 +27,10 @@
 #include <stdint.h>
 
 #include "jtag_process.h"
-#include "usb_dc.h"
+#include "usbd_ftdi.h"
 #include "hal_gpio.h"
 #include "hal_common.h"
 #include "hal_mtimer.h"
-#include "bl702_gpio.h"
-#include "bl702_pwm.h"
-#include "bl702_glb.h"
 #include "io_cfg.h"
 
 #define GOWIN_VLD                 0
@@ -405,6 +402,8 @@ ATTR_CLOCK_SECTION void jtag_process(void)
               mpsse_state = MPSSE_RCV_VALUE_L;
               break;
             case 0x87:  //Send immediate. This will make the chip flush its buffer back to the PC.
+              usbd_ftdi_send_immediate();
+              break;
             case 0x88:
             case 0x89:
               __NOP();

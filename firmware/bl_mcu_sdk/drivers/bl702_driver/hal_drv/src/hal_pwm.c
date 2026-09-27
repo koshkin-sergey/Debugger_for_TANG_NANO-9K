@@ -162,7 +162,7 @@ int pwm_register(enum pwm_index_type index, const char *name)
 
 static void pwm_isr(pwm_device_t *handle)
 {
-    uint32_t i;
+     int32_t i;
     uint32_t tmpVal;
     uint32_t timeoutCnt = 160 * 1000;
     /* Get channel register */
