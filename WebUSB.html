@@ -121,14 +121,16 @@
             connectBtn.addEventListener('click', async () => {
                 const newDevice = await navigator.usb.requestDevice({ filters: [] });
                 setDevice(newDevice);
+                if (device) {
+                    await initMPSSE();
+                    await setupMPSSE();
+                }
             });
 
             deviceIdBtn.addEventListener('click', async () => {
                 if (!device) { return; }
 
-                await initMPSSE();
-                await setupMPSSE();
-                const code = await getIDCode(numberInput.valueAsNumber - 1);
+                const code = await getIDCode(numberInput.valueAsNumber);
                 let codeLen = Math.trunc(code.length / 64) * 62;
                 if ((code.length % 64) > 2) {
                     codeLen += code.length % 64 - 2;
@@ -156,54 +158,48 @@
 
             async function setupMPSSE() {
                 await sendMPSSECommand([
-                    0x8B, 0x86, 0x00, 0x00, // Disable clock divisor
+                    0x86, 0x00, 0x00, // Disable clock divisor
                 ]);
                 await sendMPSSECommand([
                     0x80, 0x08, 0x0b, // Setup lower ftdi bits
                     0x82, 0x08, 0x0b, // Setup upper ftdi bits 
-                    0x87              // Send immediate
                 ]);
+            }
+                        
+            async function getIDCode(size) {
+                await ResetTAP();
+                await JtagInstruction(0x11);
+                const ID_Code = JtagRead(size);
+                return ID_Code;
+            }
+            
+            async function ResetTAP() {
                 await sendMPSSECommand([
                     0x4B, 0x05, 0x1F, // Reset TAP state machine
+                ]);                
+            }
+
+            async function JtagInstruction(inst) {
+                await sendMPSSECommand([
+                    0x4B, 0x03, 0x03,  // move to shift IR
+                    0x1B, 0x06, inst,  // shift in instruction (lower 7 bits)
+                    0x4B, 0x00, 0x01,  // shift in highest bit moving to exit1 ir
+                    0x4B, 0x01, 0x01,  // move to run test idle
+                    0x4B, 0x02, 0x00,  // poll for 3 clock cycles in run test idle
                 ]);
             }
 
-            async function getIDCode(size) {
-                await sendMPSSECommand([
-                    0x4B, 0x03, 0x03,  // move to shift IR
-                    0x87               // send immediate
-                ]);
-                await sendMPSSECommand([
-                    0x1B, 0x06, 0x11,  // shift in instruction 0x11 (lower 7 bits)
-                    0x4B, 0x00, 0x01,  // shift in highest bit moving to exit1 ir
-                    0x87               // send immediate
-                ]);
-                await sendMPSSECommand([
-                    0x4B, 0x01, 0x01,  // move to run test idle
-                    0x87,              // send immediate
-                ]);       
-                await sendMPSSECommand([       
-                    0x4B, 0x04, 0x00,  // poll for 5 clock cycles in run test idle
-                    0x87               // send immediate
-                ]);
-                await sendMPSSECommand([
+            async function JtagRead(size) {
+                size--;
+                const recv = await sendMPSSECommand([
                     0x4B, 0x02, 0x01, // move to shift dr
-                    0x87              // send immediate
-                ])
-                const ID_Code = await sendMPSSECommand([
                     0x28, size & 0xFF, (size >> 8) & 0xFF, // read size bytes of our ID code via TDO
-                    0x87              // send immediate
-                ]);
-                await sendMPSSECommand([
-                    0x2A, 0x06,       // read another 7 bits of our ID code
-                    0x6B, 0x00, 0x01, // read the last bit and move to exit1 dr
-                    0x87              // send immediate
-                ]);
-                await sendMPSSECommand([
+                    0x87,             // send immediate
+                    0x1B, 0x06, 0x00, // write dummy 7 bits
+                    0x4B, 0x00, 0x01, // write the last bit and move to exit1 dr
                     0x4B, 0x01, 0x01, // move to run test idle
-                    0x87              // send immediate
                 ]);
-                return [...ID_Code];
+                return recv;
             }
 
             async function sendMPSSECommand(data) {
