@@ -81,8 +81,8 @@ static void usbd_cdc_jtag_out(uint8_t ep);
 static int receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
 static int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
 
-static usbd_class_t     cdc_class0;
-static usbd_interface_t cdc_data_intf0;
+static usbd_class_t     ftdi_class;
+static usbd_interface_t ftdi_intf;
 
 static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
 static uint32_t sof_tick;
@@ -92,23 +92,23 @@ static bool send_immediate;
 static bool jtag_enable;
 
 // Endpoints for JTAG
-static usbd_endpoint_t cdc_in_ep0 = {
+static usbd_endpoint_t jtag_in_ep = {
   .ep_addr  = JTAG_IN_EP,
   .ep_cb    = usbd_cdc_jtag_in
 };
 
-static usbd_endpoint_t cdc_out_ep0 = {
+static usbd_endpoint_t jtag_out_ep = {
   .ep_addr  = JTAG_OUT_EP,
   .ep_cb    = usbd_cdc_jtag_out
 };
 
 // Endpoints for UART
-static usbd_endpoint_t cdc_in_ep1 = {
+static usbd_endpoint_t uart_in_ep = {
   .ep_addr  = CDC_IN_EP,
   .ep_cb    = usbd_cdc_acm_bulk_in
 };
 
-static usbd_endpoint_t cdc_out_ep1 = {
+static usbd_endpoint_t uart_out_ep = {
   .ep_addr  = CDC_OUT_EP,
   .ep_cb    = usbd_cdc_acm_bulk_out
 };
@@ -514,17 +514,17 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 
 void usbd_ftdi_init(void)
 {
-  cdc_data_intf0.class_handler = NULL;
-  cdc_data_intf0.custom_handler = NULL;
-  cdc_data_intf0.notify_handler = ftdi_notify_handler;
-  cdc_data_intf0.vendor_handler = ftdi_vendor_request_handler;
+  ftdi_intf.class_handler = NULL;
+  ftdi_intf.custom_handler = NULL;
+  ftdi_intf.notify_handler = ftdi_notify_handler;
+  ftdi_intf.vendor_handler = ftdi_vendor_request_handler;
 
-  usbd_class_register(&cdc_class0);
-  usbd_class_add_interface(&cdc_class0, &cdc_data_intf0);
-  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_out_ep0);
-  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_in_ep0);
-  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_out_ep1);
-  usbd_interface_add_endpoint(&cdc_data_intf0, &cdc_in_ep1);
+  usbd_class_register(&ftdi_class);
+  usbd_class_add_interface(&ftdi_class, &ftdi_intf);
+  usbd_interface_add_endpoint(&ftdi_intf, &jtag_out_ep);
+  usbd_interface_add_endpoint(&ftdi_intf, &jtag_in_ep);
+  usbd_interface_add_endpoint(&ftdi_intf, &uart_out_ep);
+  usbd_interface_add_endpoint(&ftdi_intf, &uart_in_ep);
 }
 
 void usbd_ftdi_process(void)
