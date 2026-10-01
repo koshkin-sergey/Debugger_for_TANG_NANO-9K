@@ -22,7 +22,6 @@
  * 
  */
 
-#include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
 
@@ -104,6 +103,7 @@ static uint16_t clk_div __attribute__((section(".tcm_data"))) = CLK_DIV_DEFAULT;
 static uint32_t delay_val __attribute__((section(".tcm_data"))) = PIN_DELAY_CALC(CLK_MHZ_DEFAULT, CLK_DIV_DEFAULT);
 static uint32_t mpsse_state __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static jtag_fsm_state_t jtag_fsm_state __attribute__((section(".tcm_data")));
+static bool mpsse_process __attribute__((section(".tcm_data")));
 
 __ALWAYS_STATIC_INLINE
 void jtag_write(uint8_t data)
@@ -142,6 +142,12 @@ void jtag_init(void)
   delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
 
   mpsse_state = MPSSE_IDLE;
+  mpsse_process = false;
+}
+
+bool jtag_isProcess(void)
+{
+  return (mpsse_process);
 }
 
 __STATIC_INLINE ATTR_CLOCK_SECTION
@@ -355,13 +361,16 @@ ATTR_CLOCK_SECTION void jtag_process(void)
 
   cnt = Ring_Buffer_Read(&jtag_rx_rb, &rx_buf[rx_len], sizeof(rx_buf) - rx_len);
   if (cnt == 0U) {
+    mpsse_process = false;
     return;
   }
 
+  cpu_global_irq_disable();
+
   led_set(1);
 
+  mpsse_process = true;
   rx_len += cnt;
-  cpu_global_irq_disable();
 
   while (rx_pos < rx_len) {
     rx_data = rx_buf[rx_pos];

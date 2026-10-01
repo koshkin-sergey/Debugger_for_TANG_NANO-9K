@@ -20,6 +20,7 @@
 #ifndef JTAG_PROCESS_H_
 #define JTAG_PROCESS_H_
 
+#include "stdbool.h"
 #include "ring_buffer.h"
 
 extern Ring_Buffer_Type jtag_tx_rb;
@@ -28,5 +29,6 @@ extern Ring_Buffer_Type jtag_rx_rb;
 void jtag_process(void);
 void jtag_ringbuffer_init(void);
 void jtag_init(void);
+bool jtag_isProcess(void);
 
 #endif /* JTAG_PROCESS_H_ */

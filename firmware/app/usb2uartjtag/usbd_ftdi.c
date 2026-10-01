@@ -415,13 +415,7 @@ static
 uint8_t* GetLineModemStatus(void)
 {
   ftdi_modem_status[0] = 0x01;
-
-  if (Ring_Buffer_Get_Status(&jtag_rx_rb) == RING_BUFFER_EMPTY) {
-    ftdi_modem_status[1] = 0x60;
-  }
-  else {
-    ftdi_modem_status[1] = 0x00;
-  }
+  ftdi_modem_status[1] = jtag_isProcess() ? 0x00 : 0x60;
 
   return (ftdi_modem_status);
 }
@@ -491,20 +485,18 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
     }
   }
 
-  if (zlp_flag == true) {
-    zlp_flag = false;
-    USB_Set_EPx_Rdy(ep_idx);
-    return (-USB_DC_ZLP_ERR);
-  }
-
   if (!USB_Get_EPx_TX_FIFO_Status(ep_idx, USB_FIFO_EMPTY)) {
     return (-USB_DC_RB_SIZE_SMALL_ERR);
   }
 
   uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
 
-  if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
-      time_after_eq(sof_tick, latency_timeout) || (send_immediate == true)) {
+  if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status))  ||
+      time_after_eq(sof_tick, latency_timeout)                                            ||
+      (send_immediate == true)                                                            ||
+      (zlp_flag == true))
+  {
+    zlp_flag = false;
     memcopy_to_fifo((void *)addr,
                     GetLineModemStatus(),
                     sizeof(ftdi_modem_status));
