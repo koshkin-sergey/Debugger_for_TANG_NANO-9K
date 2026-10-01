@@ -78,13 +78,14 @@ static void usbd_cdc_acm_bulk_in(uint8_t ep);
 static void usbd_cdc_acm_bulk_out(uint8_t ep);
 static void usbd_cdc_jtag_in(uint8_t ep);
 static void usbd_cdc_jtag_out(uint8_t ep);
+static uint8_t* GetLineModemStatus(void);
 static int receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
 static int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
 
 static usbd_class_t     ftdi_class;
 static usbd_interface_t ftdi_intf;
 
-static const uint8_t ftdi_modem_status[2] = {0x01, 0x60};
+static uint8_t ftdi_modem_status[2];
 static uint32_t sof_tick;
 static uint8_t latency_timer;
 static uint32_t latency_timeout;
@@ -349,7 +350,7 @@ int ftdi_vendor_request_handler(struct usb_setup_packet *pSetup,
        - B5       Transmitter holding register (THRE)
        - B6       Transmitter empty (TEMT)
        - B7       Error in RCVR FIFO */
-      *data = (uint8_t *)&ftdi_modem_status[0];
+      *data = GetLineModemStatus();
       *len  = sizeof(ftdi_modem_status);
       break;
 
@@ -408,6 +409,21 @@ void ftdi_notify_handler(uint8_t event, void *arg)
     default:
       break;
   }
+}
+
+static
+uint8_t* GetLineModemStatus(void)
+{
+  ftdi_modem_status[0] = 0x01;
+
+  if (Ring_Buffer_Get_Status(&jtag_rx_rb) == RING_BUFFER_EMPTY) {
+    ftdi_modem_status[1] = 0x60;
+  }
+  else {
+    ftdi_modem_status[1] = 0x00;
+  }
+
+  return (ftdi_modem_status);
 }
 
 static
@@ -490,7 +506,7 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
   if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status)) ||
       time_after_eq(sof_tick, latency_timeout) || (send_immediate == true)) {
     memcopy_to_fifo((void *)addr,
-                    (uint8_t *)&ftdi_modem_status[0],
+                    GetLineModemStatus(),
                     sizeof(ftdi_modem_status));
     Ring_Buffer_Read_Callback(rb,
                               USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status),
