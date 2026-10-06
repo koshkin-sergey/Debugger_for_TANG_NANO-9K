@@ -110,6 +110,10 @@ void jtag_write(uint8_t data)
 {
   cpu_global_irq_enable();
 
+  while (Ring_Buffer_Get_Status(&jtag_tx_rb) == RING_BUFFER_FULL) {
+    __NOP();
+  }
+
   Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
 
   cpu_global_irq_disable();

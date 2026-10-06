@@ -80,7 +80,7 @@ static void usbd_cdc_jtag_in(uint8_t ep);
 static void usbd_cdc_jtag_out(uint8_t ep);
 static uint8_t* GetLineModemStatus(void);
 static int receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
-static int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb);
+static int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb, uint32_t *latency_timeout);
 
 static usbd_class_t     ftdi_class;
 static usbd_interface_t ftdi_intf;
@@ -88,7 +88,8 @@ static usbd_interface_t ftdi_intf;
 static uint8_t ftdi_modem_status[2];
 static uint32_t sof_tick;
 static uint8_t latency_timer;
-static uint32_t latency_timeout;
+static uint32_t latency_timeout_jtag;
+static uint32_t latency_timeout_uart;
 static bool send_immediate;
 static bool jtag_enable;
 
@@ -144,7 +145,7 @@ void usbd_cdc_acm_bulk_out(uint8_t ep)
 static
 void usbd_cdc_acm_bulk_in(uint8_t ep)
 {
-  send_from_ringbuffer(ep, &uart1_rx_rb);
+  send_from_ringbuffer(ep, &uart1_rx_rb, &latency_timeout_uart);
 }
 
 static
@@ -156,7 +157,7 @@ void usbd_cdc_jtag_out(uint8_t ep)
 static
 void usbd_cdc_jtag_in(uint8_t ep)
 {
-  send_from_ringbuffer(ep, &jtag_tx_rb);
+  send_from_ringbuffer(ep, &jtag_tx_rb, &latency_timeout_jtag);
 }
 
 static
@@ -164,7 +165,8 @@ void usbd_ftdi_reset(void)
 {
   latency_timer = 16;  // ms
   sof_tick = 0U;
-  latency_timeout = latency_timer;
+  latency_timeout_jtag = latency_timer;
+  latency_timeout_uart = latency_timer;
   send_immediate = false;
   jtag_enable = false;
 
@@ -465,10 +467,9 @@ int receive_to_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
 }
 
 static
-int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
+int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb, uint32_t *latency_timeout)
 {
   uint8_t ep_idx;
-  static bool zlp_flag = false;
   uint32_t timeout = 0x00FFFFFF;
 
   ep_idx = USB_EP_GET_IDX(ep);
@@ -492,11 +493,9 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
   uint32_t addr = USB_BASE + 0x118 + (ep_idx - 1) * 0x10;
 
   if ((Ring_Buffer_Get_Length(rb) >= USB_FS_MAX_PACKET_SIZE - sizeof(ftdi_modem_status))  ||
-      time_after_eq(sof_tick, latency_timeout)                                            ||
-      (send_immediate == true)                                                            ||
-      (zlp_flag == true))
+      time_after_eq(sof_tick, *latency_timeout)                                            ||
+      (send_immediate == true))
   {
-    zlp_flag = false;
     memcopy_to_fifo((void *)addr,
                     GetLineModemStatus(),
                     sizeof(ftdi_modem_status));
@@ -505,12 +504,8 @@ int send_from_ringbuffer(uint8_t ep, Ring_Buffer_Type *rb)
                               memcopy_to_fifo,
                               (void *)addr);
 
-    if (Ring_Buffer_Get_Length(rb) == 0U && USB_Get_EPx_TX_FIFO_Status(ep_idx, USB_FIFO_FULL)) {
-      zlp_flag = true;
-    }
-
     USB_Set_EPx_Rdy(ep_idx);
-    latency_timeout = sof_tick + latency_timer;
+    *latency_timeout = sof_tick + latency_timer;
     send_immediate = false;
   }
   else {

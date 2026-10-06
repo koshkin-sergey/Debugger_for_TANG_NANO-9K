@@ -110,7 +110,7 @@ uint8_t cdc_descriptor[] = {
     0xff,                          /* bInterfaceClass */
     0xff,                          /* bInterfaceSubClass */
     0xff,                          /* bInterfaceProtocol */
-    0x00,                          /* iInterface */
+    0x04,                          /* iInterface */
 
     ///////////////////////////////////////
     /// endpoint descriptor
@@ -195,6 +195,19 @@ uint8_t cdc_descriptor[] = {
     '0', 0x00,                  /* wcChar20 */
     '0', 0x00,                  /* wcChar21 */
     '0', 0x00,                  /* wcChar22 */
+    ///////////////////////////////////////
+    /// string4 descriptor
+    ///////////////////////////////////////
+    0x12,                       /* bLength */
+    USB_DESCRIPTOR_TYPE_STRING, /* bDescriptorType */
+    'U', 0x00,                  /* wcChar0 */
+    'S', 0x00,                  /* wcChar1 */
+    'B', 0x00,                  /* wcChar2 */
+    ' ', 0x00,                  /* wcChar3 */
+    'U', 0x00,                  /* wcChar4 */
+    'A', 0x00,                  /* wcChar5 */
+    'R', 0x00,                  /* wcChar6 */
+    'T', 0x00,                  /* wcChar7 */
     ///////////////////////////////////////
     /// device qualifier descriptor
     ///////////////////////////////////////
