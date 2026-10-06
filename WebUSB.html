@@ -88,7 +88,7 @@
         <h1>WebUSB Tests</h1>
         <button id="connectBtn">Connect Device</button>
         <p>Device Connected: <span id="deviceConnected">None</span></p>
-        <p>ID Code size in byte: <input id="numberInput" type="number" min="1" max="65536" step="1" value="1"></p>
+        <p>ID Code size in byte: <input id="numberInput" type="number" min="1" max="65536" step="1" value="4"></p>
         <button id="deviceIdBtn">Get Device ID</button>
         <button id="descriptorsBtn">Get Device Info</button>
         <section id="deviceInfo"></section>
@@ -119,7 +119,7 @@
             }
         
             connectBtn.addEventListener('click', async () => {
-                const newDevice = await navigator.usb.requestDevice({ filters: [] });
+                const newDevice = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x0403 }] });
                 setDevice(newDevice);
                 if (device) {
                     await initMPSSE();
@@ -130,15 +130,14 @@
             deviceIdBtn.addEventListener('click', async () => {
                 if (!device) { return; }
 
+                deviceInfo.innerText = `ID Code:`;
+                SizeInfo.innerText = `Size:`;
+
                 const code = await getIDCode(numberInput.valueAsNumber);
-                let codeLen = Math.trunc(code.length / 64) * 62;
-                if ((code.length % 64) > 2) {
-                    codeLen += code.length % 64 - 2;
-                }
                 const codeInHex = code.reverse().map((byte) => {return byte.toString(16).padStart(2, '0');}).join('');
-                console.log(codeInHex);
+                
                 deviceInfo.innerText = `ID Code: ${codeInHex}`;
-                SizeInfo.innerText = `Size: ${codeLen}`;
+                SizeInfo.innerText = `Size: ${code.length}`;
             });
 
             async function initMPSSE() {
@@ -147,7 +146,7 @@
                 // Set baud rate 115200
                 await sendUSBCommand({ request: 0x03, value: 0x001a, index: 0x00 });
                 // Set latency timer to 8ms
-                await sendUSBCommand({ request: 0x09, value: 0x0008, index: 0x00 });
+                await sendUSBCommand({ request: 0x09, value: 0x0010, index: 0x00 });
                 // Set MPSSE mode
                 await sendUSBCommand({ request: 0x0b, value: 0x0200, index: 0x00 });
                 // Flush RX buffer
@@ -157,12 +156,15 @@
             }
 
             async function setupMPSSE() {
-                await sendMPSSECommand([
+                await wMPSSECommand([
                     0x86, 0x00, 0x00, // Disable clock divisor
                 ]);
-                await sendMPSSECommand([
+                await wMPSSECommand([
                     0x80, 0x08, 0x0b, // Setup lower ftdi bits
                     0x82, 0x08, 0x0b, // Setup upper ftdi bits 
+                ]);
+                await wMPSSECommand([
+                    0x85,
                 ]);
             }
                         
@@ -174,42 +176,82 @@
             }
             
             async function ResetTAP() {
-                await sendMPSSECommand([
+                await wMPSSECommand([
                     0x4B, 0x05, 0x1F, // Reset TAP state machine
                 ]);                
             }
 
             async function JtagInstruction(inst) {
-                await sendMPSSECommand([
+                await wMPSSECommand([
                     0x4B, 0x03, 0x03,  // move to shift IR
                     0x1B, 0x06, inst,  // shift in instruction (lower 7 bits)
                     0x4B, 0x00, 0x01,  // shift in highest bit moving to exit1 ir
                     0x4B, 0x01, 0x01,  // move to run test idle
-                    0x4B, 0x02, 0x00,  // poll for 3 clock cycles in run test idle
+                    0x4B, 0x04, 0x00,  // poll for 5 clock cycles in run test idle
                 ]);
             }
 
             async function JtagRead(size) {
-                size--;
-                const recv = await sendMPSSECommand([
-                    0x4B, 0x02, 0x01, // move to shift dr
-                    0x28, size & 0xFF, (size >> 8) & 0xFF, // read size bytes of our ID code via TDO
-                    0x87,             // send immediate
-                    0x1B, 0x06, 0x00, // write dummy 7 bits
-                    0x4B, 0x00, 0x01, // write the last bit and move to exit1 dr
-                    0x4B, 0x01, 0x01, // move to run test idle
-                ]);
+                let recv = [];
+                if (size > 0) {
+                    const data = [];
+                    data.push(
+                        0x4B, 0x02, 0x01,                               // move to shift dr
+                        0x28, (size-1) & 0xFF, ((size-1) >> 8) & 0xFF,  // read size bytes
+                        0x87,                                           // send immediate
+                        0x4B, 0x02, 0x03,                               // move to run test idle
+                        0x4B, 0x04, 0x00                                // poll for 5 clock cycles in run test idle
+                    );
+                    recv = await rwMPSSECommand(data);
+                }
                 return recv;
             }
 
-            async function sendMPSSECommand(data) {
+            async function wMPSSECommand(data) {
                 if (!device) { return; }
                 await device.open();
                 await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
-                const writeRes = await device.transferOut(2, new Uint8Array(data));
-                const readRes = await device.transferIn(1, 131072);
+                await device.transferOut(2, new Uint8Array(data));
                 await device.close();
-                return readRes.data?.buffer ? Array.from(new Uint8Array(readRes.data?.buffer)) : [];
+            }
+
+            async function rwMPSSECommand(data) {
+                if (!device) { return; }
+
+                await device.open();
+
+                const usb_frame_size = device.configuration.interfaces[0].alternates[0].endpoints[0].packetSize;
+
+                await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
+                await device.transferOut(2, new Uint8Array(data));
+
+                let empty;
+                const bytes = [];
+
+                do {
+                    const readRes = await device.transferIn(1, usb_frame_size * 10);
+                    console.log(readRes.data.buffer);
+                    let readSize = readRes.data.byteLength;
+                    const frame_num = Math.trunc((readSize + usb_frame_size - 1) / usb_frame_size);
+                    for (let i = 0; i < frame_num; ++i) {
+                        empty = readRes.data.getUint8(usb_frame_size * i + 1);
+                        
+                        if (readSize > 2) {
+                            let payload_size = usb_frame_size - 2;
+
+                            if (payload_size > readSize - 2) {
+                                payload_size = readSize - 2;
+                            }
+
+                            bytes.push(...new Uint8Array(readRes.data.buffer, usb_frame_size * i + 2, payload_size));
+                            readSize -= payload_size + 2;
+                        }
+                    }
+                } while (empty == 0);
+                
+                await device.close();
+                
+                return Array.from(bytes);
             }
 
             document.addEventListener('DOMContentLoaded', async () => {
@@ -379,6 +421,7 @@
                 const configurationDescriptor = await getConfigurationDescriptor();
 
                 deviceInfo.innerHTML = ''
+                SizeInfo.innerHTML = '';
                 deviceInfo.addText = (key, val) => {
                     const p = document.createElement('p');
                     const label = document.createElement('span');
