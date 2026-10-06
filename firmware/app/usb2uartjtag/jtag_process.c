@@ -22,7 +22,6 @@
  * 
  */
 
-#include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
 
@@ -30,7 +29,6 @@
 #include "usbd_ftdi.h"
 #include "hal_gpio.h"
 #include "hal_common.h"
-#include "hal_mtimer.h"
 #include "io_cfg.h"
 
 #define GOWIN_VLD                 0
@@ -64,8 +62,8 @@
 #define TDI_PIN_MASK              (1UL << TDI_PIN)
 #define TDO_PIN_MASK              (1UL << TDO_PIN)
 
-#define JTAG_TX_BUFFER_SIZE       (256)
-#define JTAG_RX_BUFFER_SIZE       (256)
+#define JTAG_TX_BUFFER_SIZE       (1024 * 4)
+#define JTAG_RX_BUFFER_SIZE       (1024 * 4)
 
 // 6.94 ns every "nop"
 // 20.82 ns every one PIN_DELAY()
@@ -105,23 +103,20 @@ static uint16_t clk_div __attribute__((section(".tcm_data"))) = CLK_DIV_DEFAULT;
 static uint32_t delay_val __attribute__((section(".tcm_data"))) = PIN_DELAY_CALC(CLK_MHZ_DEFAULT, CLK_DIV_DEFAULT);
 static uint32_t mpsse_state __attribute__((section(".tcm_data"))) = MPSSE_IDLE;
 static jtag_fsm_state_t jtag_fsm_state __attribute__((section(".tcm_data")));
+static bool mpsse_process __attribute__((section(".tcm_data")));
 
 __ALWAYS_STATIC_INLINE
 void jtag_write(uint8_t data)
 {
+  cpu_global_irq_enable();
+
+  while (Ring_Buffer_Get_Status(&jtag_tx_rb) == RING_BUFFER_FULL) {
+    __NOP();
+  }
+
   Ring_Buffer_Write_Byte(&jtag_tx_rb, data);
 
-  if (Ring_Buffer_Get_Status(&jtag_tx_rb) == RING_BUFFER_FULL) {
-    uint64_t time = mtimer_get_time_us();
-
-    cpu_global_irq_enable();
-    while (Ring_Buffer_Get_Status(&jtag_tx_rb) == RING_BUFFER_FULL) {
-      if (mtimer_get_time_us() - time > 2000U) {
-        Ring_Buffer_Reset(&jtag_tx_rb);
-      }
-    }
-    cpu_global_irq_disable();
-  }
+  cpu_global_irq_disable();
 }
 
 void jtag_ringbuffer_init(void)
@@ -151,6 +146,12 @@ void jtag_init(void)
   delay_val = PIN_DELAY_CALC(clk_mhz, clk_div);
 
   mpsse_state = MPSSE_IDLE;
+  mpsse_process = false;
+}
+
+bool jtag_isProcess(void)
+{
+  return (mpsse_process);
 }
 
 __STATIC_INLINE ATTR_CLOCK_SECTION
@@ -357,20 +358,23 @@ ATTR_CLOCK_SECTION void jtag_process(void)
   static uint8_t mpsse_cmd __attribute__((section(".tcm_data")));
   static uint32_t rx_pos __attribute__((section(".tcm_data")));
   static uint32_t rx_len __attribute__((section(".tcm_data")));
-  static uint8_t rx_buf[JTAG_RX_BUFFER_SIZE] __attribute__((section(".tcm_data")));
+  static uint8_t rx_buf[64] __attribute__((section(".tcm_data")));
 #if defined(GOWIN_VLD) && GOWIN_VLD == 1
   static uint8_t stat_cnt __attribute__((section(".tcm_data")));
 #endif
 
   cnt = Ring_Buffer_Read(&jtag_rx_rb, &rx_buf[rx_len], sizeof(rx_buf) - rx_len);
   if (cnt == 0U) {
+    mpsse_process = false;
     return;
   }
 
+  cpu_global_irq_disable();
+
   led_set(1);
 
+  mpsse_process = true;
   rx_len += cnt;
-  cpu_global_irq_disable();
 
   while (rx_pos < rx_len) {
     rx_data = rx_buf[rx_pos];
